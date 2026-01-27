@@ -28,3 +28,14 @@ int parse_i32(const char* s, int32_t* out) {
     *out = (int32_t)v;
     return 0;
 }
+
+int parse_double(const char* s, double* out) {
+    if (!s || !*s) return -1;
+    errno = 0;
+    char* end = NULL;
+    double v = strtod(s, &end);
+    if (errno != 0) return -1;
+    if (end == s || *end != '\0') return -1;
+    *out = v;
+    return 0;
+}
