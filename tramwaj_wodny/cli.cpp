@@ -93,3 +93,21 @@ int cli_parse_launcher(int argc, char** argv, cli_args_t* out) {
 
     return 0;
 }
+
+int cli_validate_launcher(const cli_args_t* a, char* err, int err_sz) {
+    if (!a) return -1;
+
+    if (a->N <= 0) { snprintf(err, err_sz, "N must be > 0"); return -1; }
+    if (a->M < 0 || a->M >= a->N) { snprintf(err, err_sz, "M must be >=0 and M < N"); return -1; }
+    if (a->K <= 0 || a->K >= a->N) { snprintf(err, err_sz, "K must be >0 and K < N"); return -1; }
+    if (a->K > MAX_K) { snprintf(err, err_sz, "K too large (max %d)", MAX_K); return -1; }
+
+    if (a->T1_ms <= 0 || a->T2_ms <= 0) { snprintf(err, err_sz, "T1 and T2 must be > 0 (ms)"); return -1; }
+    if (a->R <= 0) { snprintf(err, err_sz, "R must be > 0"); return -1; }
+    if (a->P < 0 || a->P > MAX_P) { snprintf(err, err_sz, "P must be in [0..%d]", MAX_P); return -1; }
+
+    if (a->bike_prob < 0.0 || a->bike_prob > 1.0) { snprintf(err, err_sz, "bike-prob must be in [0..1]"); return -1; }
+    if (!a->log_path[0]) { snprintf(err, err_sz, "log path empty"); return -1; }
+
+    return 0;
+}
