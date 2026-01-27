@@ -9,6 +9,17 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+static void sem_wait_nointr(sem_t* s) {
+    while (sem_wait(s) != 0) {
+        if (errno == EINTR) continue;
+        die_perror("sem_wait");
+    }
+}
+
+static void sem_post_chk(sem_t* s) {
+    if (sem_post(s) != 0) die_perror("sem_post");
+}
+
 int logger_open(logger_t* lg, const char* path, sem_t* sem_log) {
     if (!lg || !path || !sem_log) return -1;
 
