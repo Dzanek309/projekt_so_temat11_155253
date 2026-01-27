@@ -14,7 +14,6 @@ int logger_open(logger_t* lg, const char* path, sem_t* sem_log) {
 
     lg->sem_log = sem_log;
 
-    // dzieci otwieraj¹ swój FD niezale¿nie
     int fd = open(path, O_CREAT | O_WRONLY | O_APPEND, 0600);
     if (fd < 0) {
         perror("open(log)");
@@ -25,7 +24,9 @@ int logger_open(logger_t* lg, const char* path, sem_t* sem_log) {
 }
 
 void logger_close(logger_t* lg) {
-    (void)lg;
+    if (!lg) return;
+    if (lg->fd >= 0) close(lg->fd);
+    lg->fd = -1;
 }
 
 void logf(logger_t* lg, const char* role, const char* fmt, ...) {
