@@ -41,8 +41,7 @@ void logger_close(logger_t* lg) {
 }
 
 void logf(logger_t* lg, const char* role, const char* fmt, ...) {
-    (void)fmt;
-    if (!lg || lg->fd < 0 || !role) return;
+    if (!lg || lg->fd < 0 || !role || !fmt) return;
 
     sem_wait_nointr(lg->sem_log);
 
@@ -50,12 +49,26 @@ void logf(logger_t* lg, const char* role, const char* fmt, ...) {
     int64_t ms = now_ms_monotonic();
     pid_t pid = getpid();
 
-    int n = snprintf(buf, sizeof(buf), "[%lld] pid=%d role=%s\n",
+    int off = snprintf(buf, sizeof(buf), "[%lld] pid=%d role=%s ",
         (long long)ms, (int)pid, role);
-    if (n > 0) {
-        size_t len = strnlen(buf, sizeof(buf));
-        (void)write(lg->fd, buf, len);
+    if (off < 0) off = 0;
+    if (off >= (int)sizeof(buf)) off = (int)sizeof(buf) - 1;
+
+    va_list ap;
+    va_start(ap, fmt);
+    (void)vsnprintf(buf + off, sizeof(buf) - (size_t)off, fmt, ap);
+    va_end(ap);
+
+    size_t len = strnlen(buf, sizeof(buf));
+    if (len == 0 || buf[len - 1] != '\n') {
+        if (len + 1 < sizeof(buf)) {
+            buf[len] = '\n';
+            buf[len + 1] = '\0';
+            len++;
+        }
     }
+
+    (void)write(lg->fd, buf, len);
 
     sem_post_chk(lg->sem_log);
 }
