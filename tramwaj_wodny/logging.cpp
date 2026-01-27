@@ -10,14 +10,24 @@
 #include <unistd.h>
 
 int logger_open(logger_t* lg, const char* path, sem_t* sem_log) {
-	(void)lg; (void)path; (void)sem_log;
-	return -1;
+    if (!lg || !path || !sem_log) return -1;
+
+    lg->sem_log = sem_log;
+
+    // dzieci otwieraj¹ swój FD niezale¿nie
+    int fd = open(path, O_CREAT | O_WRONLY | O_APPEND, 0600);
+    if (fd < 0) {
+        perror("open(log)");
+        return -1;
+    }
+    lg->fd = fd;
+    return 0;
 }
 
 void logger_close(logger_t* lg) {
-	(void)lg;
+    (void)lg;
 }
 
 void logf(logger_t* lg, const char* role, const char* fmt, ...) {
-	(void)lg; (void)role; (void)fmt;
+    (void)lg; (void)role; (void)fmt;
 }
