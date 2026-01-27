@@ -41,5 +41,21 @@ void logger_close(logger_t* lg) {
 }
 
 void logf(logger_t* lg, const char* role, const char* fmt, ...) {
-    (void)lg; (void)role; (void)fmt;
+    (void)fmt;
+    if (!lg || lg->fd < 0 || !role) return;
+
+    sem_wait_nointr(lg->sem_log);
+
+    char buf[1024];
+    int64_t ms = now_ms_monotonic();
+    pid_t pid = getpid();
+
+    int n = snprintf(buf, sizeof(buf), "[%lld] pid=%d role=%s\n",
+        (long long)ms, (int)pid, role);
+    if (n > 0) {
+        size_t len = strnlen(buf, sizeof(buf));
+        (void)write(lg->fd, buf, len);
+    }
+
+    sem_post_chk(lg->sem_log);
 }
