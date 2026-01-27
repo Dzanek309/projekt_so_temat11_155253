@@ -1,17 +1,23 @@
-#ifndef LOGGING_H
-#define LOGGING_H
+#include "logging.h"
+#include "util.h"
 
-#include <semaphore.h>
-#include <stdarg.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-// Prosty logger do pliku (append). U¿ywa semafora do serializacji wpisów.
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifdef __cplusplus
+int logger_open(logger_t* lg, const char* path, sem_t* sem_log) {
+	(void)lg; (void)path; (void)sem_log;
+	return -1;
 }
-#endif
 
-#endif // LOGGING_H
+void logger_close(logger_t* lg) {
+	(void)lg;
+}
+
+void logf(logger_t* lg, const char* role, const char* fmt, ...) {
+	(void)lg; (void)role; (void)fmt;
+}
