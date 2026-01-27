@@ -39,3 +39,14 @@ int parse_double(const char* s, double* out) {
     *out = v;
     return 0;
 }
+
+void sleep_ms(int ms) {
+    if (ms <= 0) return;
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    while (nanosleep(&ts, &ts) != 0) {
+        if (errno == EINTR) continue;
+        die_perror("nanosleep");
+    }
+}
