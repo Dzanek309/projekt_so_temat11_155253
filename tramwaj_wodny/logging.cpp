@@ -5,6 +5,8 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static void sem_wait_nointr(sem_t* s) {
@@ -20,9 +22,8 @@ static void sem_post_chk(sem_t* s) {
 
 int logger_open(logger_t* lg, const char* path, sem_t* sem_log) {
     if (!lg || !path || !sem_log) return -1;
-
     lg->sem_log = sem_log;
-
+    // dzieci otwieraj¹ swój FD niezale¿nie
     int fd = open(path, O_CREAT | O_WRONLY | O_APPEND, 0600);
     if (fd < 0) {
         perror("open(log)");
@@ -54,10 +55,12 @@ void logf(logger_t* lg, const char* role, const char* fmt, ...) {
 
     va_list ap;
     va_start(ap, fmt);
-    (void)vsnprintf(buf + off, sizeof(buf) - (size_t)off, fmt, ap);
+    int n = vsnprintf(buf + off, sizeof(buf) - (size_t)off, fmt, ap);
     va_end(ap);
+    (void)n;
 
     size_t len = strnlen(buf, sizeof(buf));
+    // zapewnij newline
     if (len == 0 || buf[len - 1] != '\n') {
         if (len + 1 < sizeof(buf)) {
             buf[len] = '\n';
@@ -66,7 +69,8 @@ void logf(logger_t* lg, const char* role, const char* fmt, ...) {
         }
     }
 
-    (void)write(lg->fd, buf, len);
+    ssize_t wr = write(lg->fd, buf, len);
+    (void)wr;
 
     sem_post_chk(lg->sem_log);
 }
