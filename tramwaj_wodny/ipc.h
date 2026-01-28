@@ -2,6 +2,7 @@
 #define IPC_H
 
 #include "common.h"
+
 #include <semaphore.h>
 
 #ifdef __cplusplus
@@ -38,6 +39,15 @@ extern "C" {
 
     // Cleanup (tylko launcher): sem_unlink/shm_unlink/msgctl(IPC_RMID)
     int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid);
+
+    // ======= Operacje na deque mostka (pod sem_state mutexem) =======
+    int bridge_is_empty(shm_state_t* s);
+    bridge_node_t* bridge_front(shm_state_t* s);
+    bridge_node_t* bridge_back(shm_state_t* s);
+    int bridge_push_back(shm_state_t* s, bridge_node_t node);
+    int bridge_push_front(shm_state_t* s, bridge_node_t node);
+    int bridge_pop_front(shm_state_t* s, bridge_node_t* out);
+    int bridge_pop_back(shm_state_t* s, bridge_node_t* out);
 
 #ifdef __cplusplus
 }
