@@ -10,7 +10,6 @@
 #include <unistd.h>
 
 static void build_sem_name(char* out, size_t out_sz, const char* prefix, const char* suffix) {
-    // sem name must start with '/'
     snprintf(out, out_sz, "%s_%s", prefix, suffix);
 }
 
@@ -70,11 +69,13 @@ int ipc_create(ipc_handles_t* h, const char* shm_name, const char* sem_prefix,
     h->sem_bikes = sem_open_create(name, (unsigned)initial_state->M);
     if (h->sem_bikes == SEM_FAILED) return -1;
 
-    // jeszcze bez bridge i msq
-    h->sem_bridge = SEM_FAILED;
+    build_sem_name(name, sizeof(name), sem_prefix, "bridge");
+    h->sem_bridge = sem_open_create(name, (unsigned)initial_state->K);
+    if (h->sem_bridge == SEM_FAILED) return -1;
+
+    // jeszcze bez msq
     h->msqid = -1;
     *out_msqid = -1;
-
     return 0;
 }
 
@@ -109,7 +110,10 @@ int ipc_open(ipc_handles_t* h, const char* shm_name, const char* sem_prefix, int
     h->sem_bikes = sem_open_existing(name);
     if (h->sem_bikes == SEM_FAILED) return -1;
 
-    h->sem_bridge = SEM_FAILED;
+    build_sem_name(name, sizeof(name), sem_prefix, "bridge");
+    h->sem_bridge = sem_open_existing(name);
+    if (h->sem_bridge == SEM_FAILED) return -1;
+
     h->msqid = msqid;
     return 0;
 }
@@ -126,8 +130,9 @@ void ipc_close(ipc_handles_t* h) {
     if (h->sem_log && h->sem_log != SEM_FAILED) sem_close(h->sem_log);
     if (h->sem_seats && h->sem_seats != SEM_FAILED) sem_close(h->sem_seats);
     if (h->sem_bikes && h->sem_bikes != SEM_FAILED) sem_close(h->sem_bikes);
+    if (h->sem_bridge && h->sem_bridge != SEM_FAILED) sem_close(h->sem_bridge);
 
-    h->sem_state = h->sem_log = h->sem_seats = h->sem_bikes = SEM_FAILED;
+    h->sem_state = h->sem_log = h->sem_seats = h->sem_bikes = h->sem_bridge = SEM_FAILED;
 }
 
 int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
@@ -148,6 +153,9 @@ int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
 
     build_sem_name(name, sizeof(name), sem_prefix, "bikes");
     if (sem_unlink(name) != 0) perror("sem_unlink(bikes)");
+
+    build_sem_name(name, sizeof(name), sem_prefix, "bridge");
+    if (sem_unlink(name) != 0) perror("sem_unlink(bridge)");
 
     return 0;
 }
