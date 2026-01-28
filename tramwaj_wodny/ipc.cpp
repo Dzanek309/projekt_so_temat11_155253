@@ -5,11 +5,14 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static void build_sem_name(char* out, size_t out_sz, const char* prefix, const char* suffix) {
+    // sem name must start with '/'
     snprintf(out, out_sz, "%s_%s", prefix, suffix);
 }
 
@@ -73,9 +76,12 @@ int ipc_create(ipc_handles_t* h, const char* shm_name, const char* sem_prefix,
     h->sem_bridge = sem_open_create(name, (unsigned)initial_state->K);
     if (h->sem_bridge == SEM_FAILED) return -1;
 
-    // jeszcze bez msq
-    h->msqid = -1;
-    *out_msqid = -1;
+    // Message queue (SysV)
+    int msqid = msgget(IPC_PRIVATE, IPC_CREAT | IPC_EXCL | 0600);
+    if (msqid < 0) { perror("msgget"); return -1; }
+    h->msqid = msqid;
+    *out_msqid = msqid;
+
     return 0;
 }
 
@@ -136,7 +142,6 @@ void ipc_close(ipc_handles_t* h) {
 }
 
 int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
-    (void)msqid;
     if (!shm_name || !sem_prefix) return -1;
 
     if (shm_unlink(shm_name) != 0) perror("shm_unlink");
@@ -157,5 +162,8 @@ int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
     build_sem_name(name, sizeof(name), sem_prefix, "bridge");
     if (sem_unlink(name) != 0) perror("sem_unlink(bridge)");
 
+    if (msqid >= 0) {
+        if (msgctl(msqid, IPC_RMID, NULL) != 0) perror("msgctl(IPC_RMID)");
+    }
     return 0;
 }
