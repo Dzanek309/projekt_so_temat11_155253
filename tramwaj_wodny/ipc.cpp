@@ -126,10 +126,9 @@ int ipc_open(ipc_handles_t* h, const char* shm_name, const char* sem_prefix, int
 
 void ipc_close(ipc_handles_t* h) {
     if (!h) return;
-
     if (h->shm && h->shm != MAP_FAILED) munmap(h->shm, sizeof(shm_state_t));
     h->shm = NULL;
-    if (h->shm_fd >= 0) close(h->shm_fd);
+    if (h->shm_fd > 0) close(h->shm_fd);
     h->shm_fd = -1;
 
     if (h->sem_state && h->sem_state != SEM_FAILED) sem_close(h->sem_state);
@@ -144,7 +143,10 @@ void ipc_close(ipc_handles_t* h) {
 int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
     if (!shm_name || !sem_prefix) return -1;
 
-    if (shm_unlink(shm_name) != 0) perror("shm_unlink");
+    if (shm_unlink(shm_name) != 0) {
+        // nie traktuj jako fatal
+        perror("shm_unlink");
+    }
 
     char name[256];
     build_sem_name(name, sizeof(name), sem_prefix, "state");
