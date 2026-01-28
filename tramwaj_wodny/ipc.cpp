@@ -1,4 +1,5 @@
 #include "ipc.h"
+#include "util.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -8,8 +9,31 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-int ipc_create(ipc_handles_t * h, const char* shm_name, const char* sem_prefix,
-    const shm_state_t * initial_state, int* out_msqid) {
+static void build_sem_name(char* out, size_t out_sz, const char* prefix, const char* suffix) {
+    // sem name must start with '/'
+    snprintf(out, out_sz, "%s_%s", prefix, suffix);
+}
+
+static sem_t* sem_open_create(const char* name, unsigned init_val) {
+    sem_t* s = sem_open(name, O_CREAT | O_EXCL, 0600, init_val);
+    if (s == SEM_FAILED) {
+        perror("sem_open(create)");
+        return SEM_FAILED;
+    }
+    return s;
+}
+
+static sem_t* sem_open_existing(const char* name) {
+    sem_t* s = sem_open(name, 0);
+    if (s == SEM_FAILED) {
+        perror("sem_open(open)");
+        return SEM_FAILED;
+    }
+    return s;
+}
+
+int ipc_create(ipc_handles_t* h, const char* shm_name, const char* sem_prefix,
+    const shm_state_t* initial_state, int* out_msqid) {
     if (!h || !shm_name || !sem_prefix || !initial_state || !out_msqid) return -1;
     memset(h, 0, sizeof(*h));
     snprintf(h->shm_name, sizeof(h->shm_name), "%s", shm_name);
@@ -31,6 +55,17 @@ int ipc_create(ipc_handles_t * h, const char* shm_name, const char* sem_prefix,
     h->shm = (shm_state_t*)p;
     memcpy(h->shm, initial_state, sizeof(shm_state_t));
 
+    // Semafory: state + log
+    char name[256];
+
+    build_sem_name(name, sizeof(name), sem_prefix, "state");
+    h->sem_state = sem_open_create(name, 1);
+    if (h->sem_state == SEM_FAILED) return -1;
+
+    build_sem_name(name, sizeof(name), sem_prefix, "log");
+    h->sem_log = sem_open_create(name, 1);
+    if (h->sem_log == SEM_FAILED) return -1;
+
     return 0;
 }
 
@@ -51,21 +86,43 @@ int ipc_open(ipc_handles_t* h, const char* shm_name, const char* sem_prefix, int
     if (p == MAP_FAILED) { perror("mmap(open)"); return -1; }
     h->shm = (shm_state_t*)p;
 
+    char name[256];
+    build_sem_name(name, sizeof(name), sem_prefix, "state");
+    h->sem_state = sem_open_existing(name);
+    if (h->sem_state == SEM_FAILED) return -1;
+
+    build_sem_name(name, sizeof(name), sem_prefix, "log");
+    h->sem_log = sem_open_existing(name);
+    if (h->sem_log == SEM_FAILED) return -1;
+
     return 0;
 }
 
 void ipc_close(ipc_handles_t* h) {
     if (!h) return;
+
     if (h->shm && h->shm != MAP_FAILED) munmap(h->shm, sizeof(shm_state_t));
     h->shm = NULL;
     if (h->shm_fd >= 0) close(h->shm_fd);
     h->shm_fd = -1;
+
+    if (h->sem_state && h->sem_state != SEM_FAILED) sem_close(h->sem_state);
+    if (h->sem_log && h->sem_log != SEM_FAILED) sem_close(h->sem_log);
+    h->sem_state = h->sem_log = SEM_FAILED;
 }
 
 int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
-    (void)sem_prefix;
     (void)msqid;
-    if (!shm_name) return -1;
+    if (!shm_name || !sem_prefix) return -1;
+
     if (shm_unlink(shm_name) != 0) perror("shm_unlink");
+
+    char name[256];
+    build_sem_name(name, sizeof(name), sem_prefix, "state");
+    if (sem_unlink(name) != 0) perror("sem_unlink(state)");
+
+    build_sem_name(name, sizeof(name), sem_prefix, "log");
+    if (sem_unlink(name) != 0) perror("sem_unlink(log)");
+
     return 0;
 }
