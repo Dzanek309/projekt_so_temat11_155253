@@ -38,10 +38,6 @@ int ipc_create(ipc_handles_t* h, const char* shm_name, const char* sem_prefix,
     memset(h, 0, sizeof(*h));
     snprintf(h->shm_name, sizeof(h->shm_name), "%s", shm_name);
     snprintf(h->sem_prefix, sizeof(h->sem_prefix), "%s", sem_prefix);
-    h->shm_fd = -1;
-    h->shm = NULL;
-    h->msqid = -1;
-    *out_msqid = -1;
 
     // SHM
     int fd = shm_open(shm_name, O_CREAT | O_EXCL | O_RDWR, 0600);
@@ -55,7 +51,7 @@ int ipc_create(ipc_handles_t* h, const char* shm_name, const char* sem_prefix,
     h->shm = (shm_state_t*)p;
     memcpy(h->shm, initial_state, sizeof(shm_state_t));
 
-    // Semafory: state + log
+    // Semafory
     char name[256];
 
     build_sem_name(name, sizeof(name), sem_prefix, "state");
@@ -66,6 +62,19 @@ int ipc_create(ipc_handles_t* h, const char* shm_name, const char* sem_prefix,
     h->sem_log = sem_open_create(name, 1);
     if (h->sem_log == SEM_FAILED) return -1;
 
+    build_sem_name(name, sizeof(name), sem_prefix, "seats");
+    h->sem_seats = sem_open_create(name, (unsigned)initial_state->N);
+    if (h->sem_seats == SEM_FAILED) return -1;
+
+    build_sem_name(name, sizeof(name), sem_prefix, "bikes");
+    h->sem_bikes = sem_open_create(name, (unsigned)initial_state->M);
+    if (h->sem_bikes == SEM_FAILED) return -1;
+
+    // jeszcze bez bridge i msq
+    h->sem_bridge = SEM_FAILED;
+    h->msqid = -1;
+    *out_msqid = -1;
+
     return 0;
 }
 
@@ -74,9 +83,6 @@ int ipc_open(ipc_handles_t* h, const char* shm_name, const char* sem_prefix, int
     memset(h, 0, sizeof(*h));
     snprintf(h->shm_name, sizeof(h->shm_name), "%s", shm_name);
     snprintf(h->sem_prefix, sizeof(h->sem_prefix), "%s", sem_prefix);
-    h->shm_fd = -1;
-    h->shm = NULL;
-    h->msqid = msqid;
 
     int fd = shm_open(shm_name, O_RDWR, 0600);
     if (fd < 0) { perror("shm_open(open)"); return -1; }
@@ -95,6 +101,16 @@ int ipc_open(ipc_handles_t* h, const char* shm_name, const char* sem_prefix, int
     h->sem_log = sem_open_existing(name);
     if (h->sem_log == SEM_FAILED) return -1;
 
+    build_sem_name(name, sizeof(name), sem_prefix, "seats");
+    h->sem_seats = sem_open_existing(name);
+    if (h->sem_seats == SEM_FAILED) return -1;
+
+    build_sem_name(name, sizeof(name), sem_prefix, "bikes");
+    h->sem_bikes = sem_open_existing(name);
+    if (h->sem_bikes == SEM_FAILED) return -1;
+
+    h->sem_bridge = SEM_FAILED;
+    h->msqid = msqid;
     return 0;
 }
 
@@ -108,7 +124,10 @@ void ipc_close(ipc_handles_t* h) {
 
     if (h->sem_state && h->sem_state != SEM_FAILED) sem_close(h->sem_state);
     if (h->sem_log && h->sem_log != SEM_FAILED) sem_close(h->sem_log);
-    h->sem_state = h->sem_log = SEM_FAILED;
+    if (h->sem_seats && h->sem_seats != SEM_FAILED) sem_close(h->sem_seats);
+    if (h->sem_bikes && h->sem_bikes != SEM_FAILED) sem_close(h->sem_bikes);
+
+    h->sem_state = h->sem_log = h->sem_seats = h->sem_bikes = SEM_FAILED;
 }
 
 int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
@@ -123,6 +142,12 @@ int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
 
     build_sem_name(name, sizeof(name), sem_prefix, "log");
     if (sem_unlink(name) != 0) perror("sem_unlink(log)");
+
+    build_sem_name(name, sizeof(name), sem_prefix, "seats");
+    if (sem_unlink(name) != 0) perror("sem_unlink(seats)");
+
+    build_sem_name(name, sizeof(name), sem_prefix, "bikes");
+    if (sem_unlink(name) != 0) perror("sem_unlink(bikes)");
 
     return 0;
 }
