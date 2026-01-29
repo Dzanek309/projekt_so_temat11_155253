@@ -1,5 +1,6 @@
 #include "common.h"
 #include "ipc.h"
+#include "logging.h"
 #include "util.h"
 
 #include <cstdlib>
@@ -109,6 +110,10 @@ int main(int argc, char** argv) {
     memset(&ipc, 0, sizeof(ipc));
     int ipc_opened = 0;
 
+    logger_t lg;
+    memset(&lg, 0, sizeof(lg));
+    lg.fd = -1;
+
     if (have_ipc) {
         if (ipc_open(&ipc, shm_name, sem_prefix, msqid) != 0) {
             fprintf(stderr, "dispatcher: ipc_open failed\n");
@@ -116,9 +121,18 @@ int main(int argc, char** argv) {
         }
         ipc_opened = 1;
 
-        if (captain_pid <= 0) {
+        if (logger_open(&lg, log_path, ipc.sem_log) != 0) {
+            fprintf(stderr, "dispatcher: logger_open failed\n");
+            ipc_close(&ipc);
+            return 1;
+        }
+
+        if (captain_pid < 0) {
             captain_pid = read_captain_pid_from_shm(&ipc);
         }
+    }
+    else {
+        fprintf(stderr, "dispatcher: running in LEGACY mode (no IPC)\n");
     }
 
     if (!have_ipc && captain_pid <= 0) {
@@ -127,8 +141,8 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (have_ipc && captain_pid <= 0) {
-        fprintf(stderr, "dispatcher: captain pid unknown (SHM not filled yet?)\n");
-        if (ipc_opened) ipc_close(&ipc);
+        fprintf(stderr, "dispatcher: captain pid unknown (missing in SHM?)\n");
+        if (ipc_opened) { logger_close(&lg); ipc_close(&ipc); }
         return 2;
     }
 
@@ -139,12 +153,21 @@ int main(int argc, char** argv) {
         (int)captain_pid
     );
 
-    // na razie tylko szkielet; pêtla/IPC/log w kolejnych commitach
+    if (ipc_opened) {
+        logf(&lg, "dispatcher", "started captain_pid=%d", (int)captain_pid);
+    }
+
+    // na razie tylko szkielet; pêtla/sterowanie w kolejnych commitach
     while (!g_exit) {
         usleep(100000);
         break;
     }
 
-    if (ipc_opened) ipc_close(&ipc);
+    if (ipc_opened) {
+        logf(&lg, "dispatcher", "EXIT (g_exit=%d)", (int)g_exit);
+        logger_close(&lg);
+        ipc_close(&ipc);
+    }
+
     return 0;
 }
