@@ -12,7 +12,6 @@
 #include <unistd.h>
 
 static void build_sem_name(char* out, size_t out_sz, const char* prefix, const char* suffix) {
-    // sem name must start with '/'
     snprintf(out, out_sz, "%s_%s", prefix, suffix);
 }
 
@@ -143,6 +142,7 @@ void ipc_close(ipc_handles_t* h) {
 int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
     if (!shm_name || !sem_prefix) return -1;
 
+    // SHM unlink
     if (shm_unlink(shm_name) != 0) {
         // nie traktuj jako fatal
         perror("shm_unlink");
@@ -164,8 +164,67 @@ int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
     build_sem_name(name, sizeof(name), sem_prefix, "bridge");
     if (sem_unlink(name) != 0) perror("sem_unlink(bridge)");
 
+    // msg queue remove
     if (msqid >= 0) {
         if (msgctl(msqid, IPC_RMID, NULL) != 0) perror("msgctl(IPC_RMID)");
     }
+    return 0;
+}
+
+// ======= Deque ops (ring buffer) =======
+static int idx_next(int i) { return (i + 1) % BRIDGE_Q_CAP; }
+static int idx_prev(int i) { return (i - 1 + BRIDGE_Q_CAP) % BRIDGE_Q_CAP; }
+
+int bridge_is_empty(shm_state_t* s) {
+    return s->bridge.count == 0;
+}
+
+bridge_node_t* bridge_front(shm_state_t* s) {
+    if (s->bridge.count == 0) return NULL;
+    return &s->bridge.q[s->bridge.head];
+}
+
+bridge_node_t* bridge_back(shm_state_t* s) {
+    if (s->bridge.count == 0) return NULL;
+    int last = idx_prev(s->bridge.tail);
+    return &s->bridge.q[last];
+}
+
+int bridge_push_back(shm_state_t* s, bridge_node_t node) {
+    if (s->bridge.count >= BRIDGE_Q_CAP - 1) return -1;
+    s->bridge.q[s->bridge.tail] = node;
+    s->bridge.tail = idx_next(s->bridge.tail);
+    s->bridge.count++;
+    s->bridge.load_units += node.units;
+    return 0;
+}
+
+int bridge_push_front(shm_state_t* s, bridge_node_t node) {
+    if (s->bridge.count >= BRIDGE_Q_CAP - 1) return -1;
+    s->bridge.head = idx_prev(s->bridge.head);
+    s->bridge.q[s->bridge.head] = node;
+    s->bridge.count++;
+    s->bridge.load_units += node.units;
+    return 0;
+}
+
+int bridge_pop_front(shm_state_t* s, bridge_node_t* out) {
+    if (s->bridge.count == 0) return -1;
+    bridge_node_t n = s->bridge.q[s->bridge.head];
+    s->bridge.head = idx_next(s->bridge.head);
+    s->bridge.count--;
+    s->bridge.load_units -= n.units;
+    if (out) *out = n;
+    return 0;
+}
+
+int bridge_pop_back(shm_state_t* s, bridge_node_t* out) {
+    if (s->bridge.count == 0) return -1;
+    int last = idx_prev(s->bridge.tail);
+    bridge_node_t n = s->bridge.q[last];
+    s->bridge.tail = last;
+    s->bridge.count--;
+    s->bridge.load_units -= n.units;
+    if (out) *out = n;
     return 0;
 }
