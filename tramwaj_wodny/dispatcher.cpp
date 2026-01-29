@@ -1,6 +1,3 @@
-#include "common.h"
-#include "ipc.h"
-#include "logging.h"
 #include "util.h"
 
 #include <cstdlib>
@@ -8,6 +5,8 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/select.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_exit = 0;
@@ -32,23 +31,6 @@ static void usage(void) {
         "Usage (legacy):\n"
         "  dispatcher --captain-pid <pid> --log <path>\n"
     );
-}
-
-static void sem_wait_nointr(sem_t* s) {
-    while (sem_wait(s) != 0) {
-        if (errno == EINTR) continue;
-        die_perror("sem_wait");
-    }
-}
-static void sem_post_chk(sem_t* s) {
-    if (sem_post(s) != 0) die_perror("sem_post");
-}
-
-static pid_t read_captain_pid_from_shm(ipc_handles_t* ipc) {
-    sem_wait_nointr(ipc->sem_state);
-    pid_t p = ipc->shm->captain_pid;
-    sem_post_chk(ipc->sem_state);
-    return p;
 }
 
 int main(int argc, char** argv) {
@@ -106,45 +88,17 @@ int main(int argc, char** argv) {
 
     const int have_ipc = (shm_name && sem_prefix && msqid >= 0);
 
-    ipc_handles_t ipc;
-    memset(&ipc, 0, sizeof(ipc));
-    int ipc_opened = 0;
-
-    logger_t lg;
-    memset(&lg, 0, sizeof(lg));
-    lg.fd = -1;
-
-    if (have_ipc) {
-        if (ipc_open(&ipc, shm_name, sem_prefix, msqid) != 0) {
-            fprintf(stderr, "dispatcher: ipc_open failed\n");
-            return 1;
-        }
-        ipc_opened = 1;
-
-        if (logger_open(&lg, log_path, ipc.sem_log) != 0) {
-            fprintf(stderr, "dispatcher: logger_open failed\n");
-            ipc_close(&ipc);
-            return 1;
-        }
-
-        if (captain_pid < 0) {
-            captain_pid = read_captain_pid_from_shm(&ipc);
-        }
-
-        logf(&lg, "dispatcher", "started captain_pid=%d", (int)captain_pid);
-    }
-
     if (!have_ipc && captain_pid <= 0) {
         fprintf(stderr, "dispatcher: need either IPC args or --captain-pid\n");
         usage();
         return 2;
     }
 
-    if (have_ipc && captain_pid <= 0) {
-        fprintf(stderr, "dispatcher: captain pid unknown (from SHM)\n");
-        if (ipc_opened) { logger_close(&lg); ipc_close(&ipc); }
-        return 2;
-    }
+    fprintf(stderr,
+        "Dispatcher pid=%d. Commands:\n"
+        "  1 + ENTER -> early depart (SIGUSR1) [later]\n"
+        "  2 + ENTER -> stop        (SIGUSR2) [later]\n",
+        (int)getpid());
 
     fprintf(stderr,
         "dispatcher: ok (mode=%s, msqid=%d, captain_pid=%d)\n",
@@ -153,15 +107,43 @@ int main(int argc, char** argv) {
         (int)captain_pid
     );
 
+    // Pêtla interaktywna: select() z timeoutem (na razie tylko wykrywa komendy)
     while (!g_exit) {
-        usleep(100000);
-        break;
-    }
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(STDIN_FILENO, &rfds);
 
-    if (ipc_opened) {
-        logf(&lg, "dispatcher", "EXIT (g_exit=%d)", (int)g_exit);
-        logger_close(&lg);
-        ipc_close(&ipc);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 200000; // 0.2s
+
+        int sel = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+        if (sel < 0) {
+            if (errno == EINTR) continue;
+            perror("select");
+            break;
+        }
+        if (sel == 0) continue; // timeout
+
+        char buf[64];
+        ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+        if (n <= 0) break; // EOF albo b³¹d
+
+        char cmd = 0;
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n') continue;
+            cmd = buf[i];
+            break;
+        }
+
+        if (cmd == '1' || cmd == '2') {
+            if (captain_pid > 0) {
+                fprintf(stderr, "dispatcher: got cmd=%c (will signal captain pid=%d later)\n", cmd, (int)captain_pid);
+            }
+            else {
+                fprintf(stderr, "dispatcher: got cmd=%c but captain_pid unknown (IPC mode, will read later)\n", cmd);
+            }
+        }
     }
 
     return 0;
