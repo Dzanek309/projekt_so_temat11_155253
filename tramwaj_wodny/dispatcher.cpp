@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/select.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_exit = 0;
@@ -95,19 +94,19 @@ int main(int argc, char** argv) {
     }
 
     fprintf(stderr,
-        "Dispatcher pid=%d. Commands:\n"
-        "  1 + ENTER -> early depart (SIGUSR1) [later]\n"
-        "  2 + ENTER -> stop        (SIGUSR2) [later]\n",
-        (int)getpid());
-
-    fprintf(stderr,
         "dispatcher: ok (mode=%s, msqid=%d, captain_pid=%d)\n",
         have_ipc ? "IPC" : "LEGACY",
         msqid,
         (int)captain_pid
     );
 
-    // Pêtla interaktywna: select() z timeoutem (na razie tylko wykrywa komendy)
+    fprintf(stderr,
+        "Dispatcher pid=%d. Commands:\n"
+        "  1 + ENTER -> send SIGUSR1 (early depart)\n"
+        "  2 + ENTER -> send SIGUSR2 (stop)\n",
+        (int)getpid()
+    );
+
     while (!g_exit) {
         fd_set rfds;
         FD_ZERO(&rfds);
@@ -123,11 +122,11 @@ int main(int argc, char** argv) {
             perror("select");
             break;
         }
-        if (sel == 0) continue; // timeout
+        if (sel == 0) continue;
 
         char buf[64];
         ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
-        if (n <= 0) break; // EOF albo b³¹d
+        if (n <= 0) break;
 
         char cmd = 0;
         for (ssize_t i = 0; i < n; i++) {
@@ -136,12 +135,22 @@ int main(int argc, char** argv) {
             break;
         }
 
-        if (cmd == '1' || cmd == '2') {
-            if (captain_pid > 0) {
-                fprintf(stderr, "dispatcher: got cmd=%c (will signal captain pid=%d later)\n", cmd, (int)captain_pid);
+        if (cmd == '1') {
+            if (captain_pid <= 1) {
+                fprintf(stderr, "dispatcher: captain_pid unknown (provide --captain-pid)\n");
+                continue;
             }
-            else {
-                fprintf(stderr, "dispatcher: got cmd=%c but captain_pid unknown (IPC mode, will read later)\n", cmd);
+            if (kill(captain_pid, SIGUSR1) != 0) {
+                perror("kill(SIGUSR1)");
+            }
+        }
+        else if (cmd == '2') {
+            if (captain_pid <= 1) {
+                fprintf(stderr, "dispatcher: captain_pid unknown (provide --captain-pid)\n");
+                continue;
+            }
+            if (kill(captain_pid, SIGUSR2) != 0) {
+                perror("kill(SIGUSR2)");
             }
         }
     }
