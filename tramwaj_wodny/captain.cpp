@@ -5,6 +5,7 @@
 #include "util.h"
 
 #include <errno.h>
+#include <semaphore.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -76,10 +77,11 @@ int main(int argc, char** argv) {
 
     logf(&lg, "captain", "started; shm=%s msqid=%d", a.shm_name, ipc.msqid);
 
-    // Na razie: tylko obserwuj shutdown / SIGTERM i zakoñcz poprawnie.
     while (!g_exit) {
+        // Obserwuj globalny shutdown
         sem_wait_nointr(ipc.sem_state);
         int shutdown = ipc.shm->shutdown;
+        int t1 = ipc.shm->T1_ms;
         sem_post_chk(ipc.sem_state);
 
         if (shutdown) {
@@ -88,7 +90,30 @@ int main(int argc, char** argv) {
             break;
         }
 
-        sleep_ms(50);
+        // nowy cykl: LOADING
+        g_early_depart = 0;
+        set_phase(&ipc, &lg, PHASE_LOADING, 1);
+
+        int64_t start = now_ms_monotonic();
+        while (!g_exit) {
+            if (g_stop) break;
+            if (g_early_depart) break;
+            if (now_ms_monotonic() - start >= (int64_t)t1) break;
+            sleep_ms(20);
+        }
+
+        // na razie: tylko domkniêcie cyklu
+        set_phase(&ipc, &lg, PHASE_DEPARTING, 0);
+
+        if (g_stop) {
+            logf(&lg, "captain", "stop received during LOADING -> END (stub)");
+            set_phase(&ipc, &lg, PHASE_END, 0);
+            break;
+        }
+
+        logf(&lg, "captain", "departing after LOADING -> END (stub)");
+        set_phase(&ipc, &lg, PHASE_END, 0);
+        break;
     }
 
     logf(&lg, "captain", "EXIT (g_exit=%d g_stop=%d g_early_depart=%d)",
