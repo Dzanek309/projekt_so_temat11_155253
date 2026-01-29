@@ -1,3 +1,5 @@
+#include "common.h"
+#include "ipc.h"
 #include "util.h"
 
 #include <cstdlib>
@@ -29,6 +31,23 @@ static void usage(void) {
         "Usage (legacy):\n"
         "  dispatcher --captain-pid <pid> --log <path>\n"
     );
+}
+
+static void sem_wait_nointr(sem_t* s) {
+    while (sem_wait(s) != 0) {
+        if (errno == EINTR) continue;
+        die_perror("sem_wait");
+    }
+}
+static void sem_post_chk(sem_t* s) {
+    if (sem_post(s) != 0) die_perror("sem_post");
+}
+
+static pid_t read_captain_pid_from_shm(ipc_handles_t* ipc) {
+    sem_wait_nointr(ipc->sem_state);
+    pid_t p = ipc->shm->captain_pid;
+    sem_post_chk(ipc->sem_state);
+    return p;
 }
 
 int main(int argc, char** argv) {
@@ -86,9 +105,30 @@ int main(int argc, char** argv) {
 
     const int have_ipc = (shm_name && sem_prefix && msqid >= 0);
 
+    ipc_handles_t ipc;
+    memset(&ipc, 0, sizeof(ipc));
+    int ipc_opened = 0;
+
+    if (have_ipc) {
+        if (ipc_open(&ipc, shm_name, sem_prefix, msqid) != 0) {
+            fprintf(stderr, "dispatcher: ipc_open failed\n");
+            return 1;
+        }
+        ipc_opened = 1;
+
+        if (captain_pid <= 0) {
+            captain_pid = read_captain_pid_from_shm(&ipc);
+        }
+    }
+
     if (!have_ipc && captain_pid <= 0) {
         fprintf(stderr, "dispatcher: need either IPC args or --captain-pid\n");
         usage();
+        return 2;
+    }
+    if (have_ipc && captain_pid <= 0) {
+        fprintf(stderr, "dispatcher: captain pid unknown (SHM not filled yet?)\n");
+        if (ipc_opened) ipc_close(&ipc);
         return 2;
     }
 
@@ -105,5 +145,6 @@ int main(int argc, char** argv) {
         break;
     }
 
+    if (ipc_opened) ipc_close(&ipc);
     return 0;
 }
