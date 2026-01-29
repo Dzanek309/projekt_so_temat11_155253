@@ -1,4 +1,3 @@
-#include "cli.h"
 #include "util.h"
 
 #include <errno.h>
@@ -9,6 +8,7 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t g_exit = 0;
+
 static void on_term(int) { g_exit = 1; }
 
 static void install_handlers(void) {
@@ -16,27 +16,62 @@ static void install_handlers(void) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_term;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
 
     if (sigaction(SIGINT, &sa, NULL) != 0) die_perror("sigaction(SIGINT)");
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
 }
 
-int main(int argc, char** argv) {
-    cli_args_t a;
-    int r = cli_parse_dispatcher(argc, argv, &a);
-    if (r == 1) { cli_print_usage_dispatcher(); return 0; }
-    if (r != 0) { cli_print_usage_dispatcher(); return 2; }
+static void usage(void) {
+    fprintf(stderr,
+        "Usage:\n"
+        "  dispatcher --captain-pid <pid>\n"
+        "\n"
+        "Commands (stdin):\n"
+        "  1 + ENTER -> SIGUSR1 (early depart)\n"
+        "  2 + ENTER -> SIGUSR2 (stop)\n");
+}
 
+static int parse_pid(int argc, char** argv, pid_t* out_pid) {
+    pid_t pid = -1;
+
+    for (int i = 1; i < argc; i++) {
+        const char* a = argv[i];
+
+        if (strcmp(a, "--captain-pid") == 0) {
+            if (i + 1 >= argc) return -1;
+            pid = (pid_t)atoi(argv[++i]);
+        }
+        else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
+            usage();
+            return 1; // help shown
+        }
+        else {
+            fprintf(stderr, "Unknown arg: %s\n", a);
+            return -1;
+        }
+    }
+
+    if (pid <= 1) return -1;
+    *out_pid = pid;
+    return 0;
+}
+
+int main(int argc, char** argv) {
     install_handlers();
 
-    const pid_t captain_pid = a.captain_pid;
+    pid_t captain_pid = -1;
+    int pr = parse_pid(argc, argv, &captain_pid);
+    if (pr == 1) return 0;
+    if (pr != 0) {
+        usage();
+        return 2;
+    }
 
     fprintf(stderr,
-        "Dispatcher pid=%d. Commands:\n"
+        "Dispatcher pid=%d (captain_pid=%d). Commands:\n"
         "  1 + ENTER -> send SIGUSR1 (early depart)\n"
         "  2 + ENTER -> send SIGUSR2 (stop)\n",
-        (int)getpid());
+        (int)getpid(), (int)captain_pid);
 
     while (!g_exit) {
         fd_set rfds;
@@ -53,7 +88,7 @@ int main(int argc, char** argv) {
             perror("select");
             break;
         }
-        if (sel == 0) continue; // timeout
+        if (sel == 0) continue;
 
         char buf[64];
         ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
