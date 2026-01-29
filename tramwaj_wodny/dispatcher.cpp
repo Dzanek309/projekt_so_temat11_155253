@@ -1,5 +1,6 @@
 #include "util.h"
 
+#include <cstdlib>
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
