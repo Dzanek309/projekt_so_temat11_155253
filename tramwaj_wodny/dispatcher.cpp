@@ -105,11 +105,6 @@ int main(int argc, char** argv) {
     }
 
     const int have_ipc = (shm_name && sem_prefix && msqid >= 0);
-    if (!have_ipc && captain_pid <= 0) {
-        fprintf(stderr, "dispatcher: need either IPC args or --captain-pid\n");
-        usage();
-        return 2;
-    }
 
     ipc_handles_t ipc;
     memset(&ipc, 0, sizeof(ipc));
@@ -136,16 +131,27 @@ int main(int argc, char** argv) {
             captain_pid = read_captain_pid_from_shm(&ipc);
         }
 
-        logf(&lg, "dispatcher", "started (IPC) captain_pid=%d msqid=%d", (int)captain_pid, msqid);
+        logf(&lg, "dispatcher", "started captain_pid=%d", (int)captain_pid);
     }
-    else {
-        fprintf(stderr, "dispatcher: running in LEGACY mode (no IPC)\n");
-        fprintf(stderr, "dispatcher: captain_pid=%d\n", (int)captain_pid);
+
+    if (!have_ipc && captain_pid <= 0) {
+        fprintf(stderr, "dispatcher: need either IPC args or --captain-pid\n");
+        usage();
+        return 2;
+    }
+
+    if (have_ipc && captain_pid <= 0) {
+        fprintf(stderr, "dispatcher: captain pid unknown (from SHM)\n");
+        if (ipc_opened) { logger_close(&lg); ipc_close(&ipc); }
+        return 2;
     }
 
     fprintf(stderr,
-        "Dispatcher pid=%d. (stub loop for now)\n",
-        (int)getpid());
+        "dispatcher: ok (mode=%s, msqid=%d, captain_pid=%d)\n",
+        have_ipc ? "IPC" : "LEGACY",
+        msqid,
+        (int)captain_pid
+    );
 
     while (!g_exit) {
         usleep(100000);
