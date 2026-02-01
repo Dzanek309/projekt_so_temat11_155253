@@ -1,10 +1,6 @@
-#include "common.h"
-#include "ipc.h"
 #include "cli.h"
-#include "logging.h"
 #include "util.h"
 
-#include <errno.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -25,16 +21,6 @@ static void install_handlers(void) {
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
 }
 
-static void sem_wait_nointr(sem_t* s) {
-    while (sem_wait(s) != 0) {
-        if (errno == EINTR) continue;
-        die_perror("sem_wait");
-    }
-}
-static void sem_post_chk(sem_t* s) {
-    if (sem_post(s) != 0) die_perror("sem_post");
-}
-
 int main(int argc, char** argv) {
     cli_args_t a;
     int r = cli_parse_passenger(argc, argv, &a);
@@ -43,43 +29,14 @@ int main(int argc, char** argv) {
 
     install_handlers();
 
-    ipc_handles_t ipc;
-    if (ipc_open(&ipc, a.shm_name, a.sem_prefix, a.msqid) != 0) {
-        fprintf(stderr, "passenger: ipc_open failed\n");
-        return 1;
-    }
+    fprintf(stderr,
+        "passenger: start (shm=%s sem_prefix=%s msqid=%d dir=%d bike=%d log=%s)\n",
+        a.shm_name, a.sem_prefix, (int)a.msqid, (int)a.desired_dir, (int)a.bike_flag, a.log_path);
 
-    logger_t lg;
-    if (logger_open(&lg, a.log_path, ipc.sem_log) != 0) {
-        fprintf(stderr, "passenger: logger_open failed\n");
-        ipc_close(&ipc);
-        return 1;
-    }
-
-    const pid_t me = getpid();
-    logf(&lg, "passenger", "started pid=%d desired_dir=%d bike_flag=%d",
-        (int)me, (int)a.desired_dir, (int)a.bike_flag);
-
-    // Na razie: tylko obserwuj END/shutdown (logika wejœcia/mostka w kolejnych commitach).
     while (!g_exit) {
-        sem_wait_nointr(ipc.sem_state);
-        int shutdown = ipc.shm->shutdown;
-        phase_t ph = ipc.shm->phase;
-        int trip_no = ipc.shm->trip_no;
-        sem_post_chk(ipc.sem_state);
-
-        if (shutdown || ph == PHASE_END) {
-            logf(&lg, "passenger", "END/shutdown observed (shutdown=%d phase=%d trip=%d) -> exit",
-                shutdown, (int)ph, trip_no);
-            break;
-        }
-
-        usleep(100000); // 100ms
+        usleep(100000);
+        break;
     }
 
-    logf(&lg, "passenger", "EXIT (g_exit=%d)", (int)g_exit);
-
-    logger_close(&lg);
-    ipc_close(&ipc);
     return 0;
 }
