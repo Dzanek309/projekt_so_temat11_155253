@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -22,6 +23,16 @@ static void install_handlers(void) {
 
     if (sigaction(SIGINT, &sa, NULL) != 0) die_perror("sigaction(SIGINT)");
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
+}
+
+static void sem_wait_nointr(sem_t* s) {
+    while (sem_wait(s) != 0) {
+        if (errno == EINTR) continue;
+        die_perror("sem_wait");
+    }
+}
+static void sem_post_chk(sem_t* s) {
+    if (sem_post(s) != 0) die_perror("sem_post");
 }
 
 int main(int argc, char** argv) {
@@ -45,14 +56,25 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    logf(&lg, "passenger", "started (pid=%d dir=%d bike=%d)",
-        (int)getpid(), (int)a.desired_dir, (int)a.bike_flag);
+    const pid_t me = getpid();
+    logf(&lg, "passenger", "started pid=%d desired_dir=%d bike_flag=%d",
+        (int)me, (int)a.desired_dir, (int)a.bike_flag);
 
-    // TODO: logika pasa¿era w kolejnych commitach
-
+    // Na razie: tylko obserwuj END/shutdown (logika wejœcia/mostka w kolejnych commitach).
     while (!g_exit) {
-        sleep_ms(50);
-        break;
+        sem_wait_nointr(ipc.sem_state);
+        int shutdown = ipc.shm->shutdown;
+        phase_t ph = ipc.shm->phase;
+        int trip_no = ipc.shm->trip_no;
+        sem_post_chk(ipc.sem_state);
+
+        if (shutdown || ph == PHASE_END) {
+            logf(&lg, "passenger", "END/shutdown observed (shutdown=%d phase=%d trip=%d) -> exit",
+                shutdown, (int)ph, trip_no);
+            break;
+        }
+
+        usleep(100000); // 100ms
     }
 
     logf(&lg, "passenger", "EXIT (g_exit=%d)", (int)g_exit);
