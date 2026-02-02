@@ -1,15 +1,17 @@
 ﻿#include "common.h"
 #include "ipc.h"
 #include "cli.h"
-#include "logging.h"
 #include "util.h"
+#include "logging.h"
 
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static volatile sig_atomic_t g_shutdown = 0;
 static void on_term(int) { g_shutdown = 1; }
@@ -25,6 +27,26 @@ static void install_handlers(void) {
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
 }
 
+static void spawn_exec(const char* path, char* const argvv[], pid_t* out_pid) {
+    pid_t pid = fork();
+    if (pid < 0) die_perror("fork");
+    if (pid == 0) {
+        execv(path, argvv);
+        die_perror("execv");
+    }
+    if (out_pid) *out_pid = pid;
+}
+
+static void sem_wait_nointr(sem_t* s) {
+    while (sem_wait(s) != 0) {
+        if (errno == EINTR) continue;
+        die_perror("sem_wait");
+    }
+}
+static void sem_post_chk(sem_t* s) {
+    if (sem_post(s) != 0) die_perror("sem_post");
+}
+
 int main(int argc, char** argv) {
     cli_args_t args;
     int pr = cli_parse_launcher(argc, argv, &args);
@@ -37,17 +59,17 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    // Minimalne prawa dostępu do IPC
     umask(0077);
-
     install_handlers();
 
+    // Unikalne nazwy IPC zależne od PID launchera
     pid_t launcher_pid = getpid();
     char shm_name[128];
     char sem_prefix[128];
     snprintf(shm_name, sizeof(shm_name), "/tramwaj_shm_%d", (int)launcher_pid);
     snprintf(sem_prefix, sizeof(sem_prefix), "/tramwaj_%d", (int)launcher_pid);
 
+    // Stan początkowy SHM
     shm_state_t init;
     memset(&init, 0, sizeof(init));
     init.N = args.N;
@@ -63,7 +85,6 @@ int main(int argc, char** argv) {
     init.boarding_open = 1;
     init.trip_no = 0;
     init.shutdown = 0;
-
     init.onboard_passengers = 0;
     init.onboard_bikes = 0;
 
@@ -76,27 +97,82 @@ int main(int argc, char** argv) {
     ipc_handles_t ipc;
     int msqid = -1;
     if (ipc_create(&ipc, shm_name, sem_prefix, &init, &msqid) != 0) {
-        fprintf(stderr, "tramwaj: ipc_create failed\n");
+        fprintf(stderr, "Failed to create IPC\n");
         return 1;
     }
 
     logger_t lg;
     if (logger_open(&lg, args.log_path, ipc.sem_log) != 0) {
-        fprintf(stderr, "tramwaj: logger_open failed\n");
-        ipc_close(&ipc);
+        fprintf(stderr, "Failed to open log\n");
         ipc_destroy(shm_name, sem_prefix, msqid);
         return 1;
     }
 
-    logf(&lg, "launcher", "IPC created shm=%s sem_prefix=%s msqid=%d (skeleton)",
+    logf(&lg, "launcher", "IPC created shm=%s sem_prefix=%s msqid=%d",
         shm_name, sem_prefix, msqid);
 
-    // na razie tylko szkielet: tworzymy IPC i od razu kończymy
-    if (g_shutdown) {
-        logf(&lg, "launcher", "shutdown requested early");
+    char msqid_buf[32];
+    snprintf(msqid_buf, sizeof(msqid_buf), "%d", msqid);
+
+    char* captain_argv[] = {
+        (char*)"./captain",
+        (char*)"--shm", shm_name,
+        (char*)"--sem-prefix", sem_prefix,
+        (char*)"--msqid", msqid_buf,
+        (char*)"--log", args.log_path,
+        NULL
+    };
+
+    pid_t captain_pid = -1;
+    spawn_exec("./captain", captain_argv, &captain_pid);
+    logf(&lg, "launcher", "spawned captain pid=%d", (int)captain_pid);
+
+    // zapisz PID kapitana do SHM
+    sem_wait_nointr(ipc.sem_state);
+    ipc.shm->captain_pid = captain_pid;
+    sem_post_chk(ipc.sem_state);
+
+    char* dispatcher_argv[] = {
+        (char*)"./dispatcher",
+        (char*)"--shm", shm_name,
+        (char*)"--sem-prefix", sem_prefix,
+        (char*)"--msqid", msqid_buf,
+        (char*)"--log", args.log_path,
+        NULL
+    };
+
+    pid_t dispatcher_pid = -1;
+    spawn_exec("./dispatcher", dispatcher_argv, &dispatcher_pid);
+    logf(&lg, "launcher", "spawned dispatcher pid=%d", (int)dispatcher_pid);
+
+    int alive = 2;
+    while (alive > 0) {
+        if (g_shutdown) {
+            logf(&lg, "launcher", "shutdown requested -> set flag + SIGTERM children");
+
+            sem_wait_nointr(ipc.sem_state);
+            ipc.shm->shutdown = 1;
+            ipc.shm->phase = PHASE_END;
+            ipc.shm->boarding_open = 0;
+            sem_post_chk(ipc.sem_state);
+
+            if (captain_pid > 1) kill(captain_pid, SIGTERM);
+            if (dispatcher_pid > 1) kill(dispatcher_pid, SIGTERM);
+
+            g_shutdown = 0;
+        }
+
+        int status = 0;
+        pid_t w = waitpid(-1, &status, 0);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            perror("waitpid");
+            break;
+        }
+        alive--;
     }
 
-    logf(&lg, "launcher", "cleaning up IPC (skeleton)");
+    logf(&lg, "launcher", "children finished -> cleanup IPC");
     logger_close(&lg);
 
     ipc_close(&ipc);
