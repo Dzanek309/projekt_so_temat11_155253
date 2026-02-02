@@ -42,7 +42,7 @@ static int proc_limit_ok(int want_children) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_NPROC, &rl) != 0) {
         perror("getrlimit(RLIMIT_NPROC)");
-        return 1; // nie blokuj jeśli nie da się odczytać
+        return 1;
     }
     if (rl.rlim_cur == RLIM_INFINITY) return 1;
     if ((unsigned long)want_children + 20 > (unsigned long)rl.rlim_cur) return 0;
@@ -161,7 +161,6 @@ int main(int argc, char** argv) {
     spawn_exec("./dispatcher", dispatcher_argv, &dispatcher_pid);
     logf(&lg, "launcher", "spawned dispatcher pid=%d", (int)dispatcher_pid);
 
-    // Spawn passengers
     srand((unsigned)launcher_pid);
 
     pid_t* passenger_pids = (pid_t*)calloc((size_t)args.P, sizeof(pid_t));
@@ -199,7 +198,7 @@ int main(int argc, char** argv) {
     int alive = want_children;
     while (alive > 0) {
         if (g_shutdown) {
-            logf(&lg, "launcher", "shutdown requested -> set flag + SIGTERM children");
+            logf(&lg, "launcher", "shutdown requested, signalling children...");
 
             sem_wait_nointr(ipc.sem_state);
             ipc.shm->shutdown = 1;
@@ -216,6 +215,13 @@ int main(int argc, char** argv) {
             // daj czas na wyjście
             sleep_ms(200);
 
+            // a potem SIGKILL jeśli ktoś wisi
+            if (captain_pid > 1) kill(captain_pid, SIGKILL);
+            if (dispatcher_pid > 1) kill(dispatcher_pid, SIGKILL);
+            for (int i = 0; i < args.P; i++) {
+                if (passenger_pids && passenger_pids[i] > 1) kill(passenger_pids[i], SIGKILL);
+            }
+
             g_shutdown = 0;
         }
 
@@ -229,7 +235,7 @@ int main(int argc, char** argv) {
         alive--;
     }
 
-    logf(&lg, "launcher", "children finished -> cleanup IPC");
+    logf(&lg, "launcher (tramwaj)", "children finished, cleaning up IPC");
     logger_close(&lg);
 
     ipc_close(&ipc);
