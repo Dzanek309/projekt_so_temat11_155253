@@ -5,7 +5,6 @@
 #include "util.h"
 
 #include <errno.h>
-#include <semaphore.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -144,16 +143,11 @@ int main(int argc, char** argv) {
 
     int trips_done = 0;
 
-    // ====== STUB: cykle rejsów, zakoñcz po R ======
     while (!g_exit) {
         // SprawdŸ shutdown z launchera
         sem_wait_nointr(ipc.sem_state);
         int shutdown = ipc.shm->shutdown;
-        int t1 = ipc.shm->T1_ms;
-        int t2 = ipc.shm->T2_ms;
-        int rmax = ipc.shm->R;
         sem_post_chk(ipc.sem_state);
-
         if (shutdown) {
             logf(&lg, "captain", "shutdown flag set -> END");
             set_phase(&ipc, &lg, PHASE_END, 0);
@@ -189,7 +183,8 @@ int main(int argc, char** argv) {
                 logf(&lg, "captain", "early depart signal received");
                 break;
             }
-            if (now_ms_monotonic() - start >= (int64_t)t1) {
+            int64_t now = now_ms_monotonic();
+            if (now - start >= ipc.shm->T1_ms) {
                 logf(&lg, "captain", "T1 elapsed -> depart");
                 break;
             }
@@ -246,10 +241,11 @@ int main(int argc, char** argv) {
 
         // ===== SAILING =====
         set_phase(&ipc, &lg, PHASE_SAILING, 0);
-        logf(&lg, "captain", "sailing for T2=%dms", t2);
+        logf(&lg, "captain", "sailing for T2=%dms", ipc.shm->T2_ms);
         int64_t sail_start = now_ms_monotonic();
         while (!g_exit) {
-            if (now_ms_monotonic() - sail_start >= (int64_t)t2) break;
+            int64_t now = now_ms_monotonic();
+            if (now - sail_start >= ipc.shm->T2_ms) break;
             sleep_ms(20);
         }
 
@@ -275,8 +271,8 @@ int main(int argc, char** argv) {
             my_trip, dir_str(trip_dir), trip_boarded_pax, trip_boarded_bikes, trip_left_bridge);
 
         trips_done++;
-        if (trips_done >= rmax) {
-            logf(&lg, "captain", "max trips R=%d reached -> END", rmax);
+        if (trips_done >= ipc.shm->R) {
+            logf(&lg, "captain", "max trips R=%d reached -> END", ipc.shm->R);
             set_phase(&ipc, &lg, PHASE_END, 0);
             break;
         }
@@ -290,4 +286,15 @@ int main(int argc, char** argv) {
 
         // prze³¹cz kierunek na rejs powrotny
         sem_wait_nointr(ipc.sem_state);
-        ipc.shm->direction =
+        ipc.shm->direction = (ipc.shm->direction == DIR_KRAKOW_TO_TYNIEC)
+            ? DIR_TYNIEC_TO_KRAKOW : DIR_KRAKOW_TO_TYNIEC;
+        sem_post_chk(ipc.sem_state);
+    }
+
+    logf(&lg, "captain", "EXIT (g_exit=%d g_stop=%d g_early_depart=%d trips_done=%d)",
+        (int)g_exit, (int)g_stop, (int)g_early_depart, (int)trips_done);
+
+    logger_close(&lg);
+    ipc_close(&ipc);
+    return 0;
+}
