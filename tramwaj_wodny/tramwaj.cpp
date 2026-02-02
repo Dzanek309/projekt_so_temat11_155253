@@ -10,11 +10,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 static volatile sig_atomic_t g_shutdown = 0;
+
 static void on_term(int) { g_shutdown = 1; }
 
 static void install_handlers(void) {
@@ -23,7 +24,6 @@ static void install_handlers(void) {
     sa.sa_handler = on_term;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-
     if (sigaction(SIGINT, &sa, NULL) != 0) die_perror("sigaction(SIGINT)");
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
 }
@@ -42,21 +42,14 @@ static int proc_limit_ok(int want_children) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_NPROC, &rl) != 0) {
         perror("getrlimit(RLIMIT_NPROC)");
-        return 1;
+        return 1; // nie blokuj jeśli nie da się odczytać
     }
+    // rl.rlim_cur może być RLIM_INFINITY
     if (rl.rlim_cur == RLIM_INFINITY) return 1;
+    // Minimalny check: jeśli limit jest bardzo niski, ostrzeż.
+    // W praktyce i tak fork() zwróci błąd.
     if ((unsigned long)want_children + 20 > (unsigned long)rl.rlim_cur) return 0;
     return 1;
-}
-
-static void sem_wait_nointr(sem_t* s) {
-    while (sem_wait(s) != 0) {
-        if (errno == EINTR) continue;
-        die_perror("sem_wait");
-    }
-}
-static void sem_post_chk(sem_t* s) {
-    if (sem_post(s) != 0) die_perror("sem_post");
 }
 
 int main(int argc, char** argv) {
@@ -71,8 +64,10 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // Minimalne prawa dostępu do IPC
     umask(0077);
 
+    // Limit procesów: launcher + captain + dispatcher + P
     int want_children = 2 + args.P;
     if (!proc_limit_ok(want_children)) {
         fprintf(stderr, "Refusing to spawn %d children: RLIMIT_NPROC too low\n", want_children);
@@ -81,12 +76,14 @@ int main(int argc, char** argv) {
 
     install_handlers();
 
+    // Unikalne nazwy IPC zależne od PID launchera
     pid_t launcher_pid = getpid();
     char shm_name[128];
     char sem_prefix[128];
     snprintf(shm_name, sizeof(shm_name), "/tramwaj_shm_%d", (int)launcher_pid);
     snprintf(sem_prefix, sizeof(sem_prefix), "/tramwaj_%d", (int)launcher_pid);
 
+    // Stan początkowy SHM
     shm_state_t init;
     memset(&init, 0, sizeof(init));
     init.N = args.N;
@@ -118,49 +115,53 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // logger dla launchera (tylko do kilku wpisów)
     logger_t lg;
     if (logger_open(&lg, args.log_path, ipc.sem_log) != 0) {
         fprintf(stderr, "Failed to open log\n");
+        // cleanup i wyjście
         ipc_destroy(shm_name, sem_prefix, msqid);
         return 1;
     }
+    logf(&lg, "launcher", "IPC created shm=%s sem_prefix=%s msqid=%d", shm_name, sem_prefix, msqid);
 
-    logf(&lg, "launcher", "IPC created shm=%s sem_prefix=%s msqid=%d",
-        shm_name, sem_prefix, msqid);
-
+    // Spawn captain
     char msqid_buf[32];
     snprintf(msqid_buf, sizeof(msqid_buf), "%d", msqid);
 
     char* captain_argv[] = {
-        (char*)"./captain",
-        (char*)"--shm", shm_name,
-        (char*)"--sem-prefix", sem_prefix,
-        (char*)"--msqid", msqid_buf,
-        (char*)"--log", args.log_path,
-        NULL
+      (char*)"./captain",
+      (char*)"--shm", shm_name,
+      (char*)"--sem-prefix", sem_prefix,
+      (char*)"--msqid", msqid_buf,
+      (char*)"--log", args.log_path,
+      NULL
     };
 
     pid_t captain_pid = -1;
     spawn_exec("./captain", captain_argv, &captain_pid);
     logf(&lg, "launcher", "spawned captain pid=%d", (int)captain_pid);
 
-    sem_wait_nointr(ipc.sem_state);
+    // Zapisz PID kapitana w SHM
+    while (sem_wait(ipc.sem_state) != 0) { if (errno == EINTR) continue; die_perror("sem_wait"); }
     ipc.shm->captain_pid = captain_pid;
-    sem_post_chk(ipc.sem_state);
+    if (sem_post(ipc.sem_state) != 0) die_perror("sem_post");
 
+    // Spawn dispatcher
     char* dispatcher_argv[] = {
-        (char*)"./dispatcher",
-        (char*)"--shm", shm_name,
-        (char*)"--sem-prefix", sem_prefix,
-        (char*)"--msqid", msqid_buf,
-        (char*)"--log", args.log_path,
-        NULL
+      (char*)"./dispatcher",
+      (char*)"--shm", shm_name,
+      (char*)"--sem-prefix", sem_prefix,
+      (char*)"--msqid", msqid_buf,
+      (char*)"--log", args.log_path,
+      NULL
     };
-
     pid_t dispatcher_pid = -1;
     spawn_exec("./dispatcher", dispatcher_argv, &dispatcher_pid);
     logf(&lg, "launcher", "spawned dispatcher pid=%d", (int)dispatcher_pid);
 
+    // Spawn passengers
+    // Pasażerowie losują kierunek (0/1) i rower wg bike_prob
     srand((unsigned)launcher_pid);
 
     pid_t* passenger_pids = (pid_t*)calloc((size_t)args.P, sizeof(pid_t));
@@ -178,51 +179,50 @@ int main(int argc, char** argv) {
         snprintf(bike_buf, sizeof(bike_buf), "%d", bike);
 
         char* pass_argv[] = {
-            (char*)"./passenger",
-            (char*)"--shm", shm_name,
-            (char*)"--sem-prefix", sem_prefix,
-            (char*)"--msqid", msqid_buf,
-            (char*)"--log", args.log_path,
-            (char*)"--dir", dir_buf,
-            (char*)"--bike", bike_buf,
-            NULL
+          (char*)"./passenger",
+          (char*)"--shm", shm_name,
+          (char*)"--sem-prefix", sem_prefix,
+          (char*)"--msqid", msqid_buf,
+          (char*)"--log", args.log_path,
+          (char*)"--dir", dir_buf,
+          (char*)"--bike", bike_buf,
+          NULL
         };
 
         pid_t pp = -1;
         spawn_exec("./passenger", pass_argv, &pp);
         passenger_pids[i] = pp;
 
+        // drobne rozproszenie startu, żeby nie "zabić" systemu testów
         sleep_ms(2);
     }
 
+    // główna pętla czekania
     int alive = want_children;
     while (alive > 0) {
         if (g_shutdown) {
             logf(&lg, "launcher", "shutdown requested, signalling children...");
 
-            sem_wait_nointr(ipc.sem_state);
+            // ustaw shutdown w SHM
+            while (sem_wait(ipc.sem_state) != 0) { if (errno == EINTR) continue; die_perror("sem_wait"); }
             ipc.shm->shutdown = 1;
             ipc.shm->phase = PHASE_END;
             ipc.shm->boarding_open = 0;
-            sem_post_chk(ipc.sem_state);
+            if (sem_post(ipc.sem_state) != 0) die_perror("sem_post");
 
+            // SIGTERM do wszystkich dzieci
             if (captain_pid > 1) kill(captain_pid, SIGTERM);
             if (dispatcher_pid > 1) kill(dispatcher_pid, SIGTERM);
-            for (int i = 0; i < args.P; i++) {
-                if (passenger_pids && passenger_pids[i] > 1) kill(passenger_pids[i], SIGTERM);
-            }
+            for (int i = 0; i < args.P; i++) if (passenger_pids && passenger_pids[i] > 1) kill(passenger_pids[i], SIGTERM);
 
             // daj czas na wyjście
             sleep_ms(200);
-
             // a potem SIGKILL jeśli ktoś wisi
             if (captain_pid > 1) kill(captain_pid, SIGKILL);
             if (dispatcher_pid > 1) kill(dispatcher_pid, SIGKILL);
-            for (int i = 0; i < args.P; i++) {
-                if (passenger_pids && passenger_pids[i] > 1) kill(passenger_pids[i], SIGKILL);
-            }
+            for (int i = 0; i < args.P; i++) if (passenger_pids && passenger_pids[i] > 1) kill(passenger_pids[i], SIGKILL);
 
-            g_shutdown = 0;
+            g_shutdown = 0; // żeby nie powtarzać
         }
 
         int status = 0;
@@ -241,5 +241,6 @@ int main(int argc, char** argv) {
     ipc_close(&ipc);
     ipc_destroy(shm_name, sem_prefix, msqid);
     free(passenger_pids);
+
     return 0;
 }
