@@ -142,12 +142,13 @@ int main(int argc, char** argv) {
 
     logf(&lg, "captain", "started; shm=%s msqid=%d", a.shm_name, ipc.msqid);
 
-    // ====== STUB: tylko cykl LOADING -> DEPARTING + czyszczenie mostka ======
+    // ====== STUB: jeden rejs: LOADING -> DEPARTING -> SAILING -> UNLOADING -> END ======
     while (!g_exit) {
         // SprawdŸ shutdown z launchera
         sem_wait_nointr(ipc.sem_state);
         int shutdown = ipc.shm->shutdown;
         int t1 = ipc.shm->T1_ms;
+        int t2 = ipc.shm->T2_ms;
         sem_post_chk(ipc.sem_state);
 
         if (shutdown) {
@@ -240,11 +241,36 @@ int main(int argc, char** argv) {
             break;
         }
 
+        // ===== SAILING =====
+        set_phase(&ipc, &lg, PHASE_SAILING, 0);
+        logf(&lg, "captain", "sailing for T2=%dms", t2);
+        int64_t sail_start = now_ms_monotonic();
+        while (!g_exit) {
+            if (now_ms_monotonic() - sail_start >= (int64_t)t2) break;
+            sleep_ms(20);
+        }
+
+        // ===== UNLOADING =====
+        set_phase(&ipc, &lg, PHASE_UNLOADING, 0);
+        sem_wait_nointr(ipc.sem_state);
+        ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
+        sem_post_chk(ipc.sem_state);
+        logf(&lg, "captain", "arrived -> UNLOADING");
+
+        // czekaj a¿ wszyscy zejda
+        for (;;) {
+            sem_wait_nointr(ipc.sem_state);
+            int onboard = ipc.shm->onboard_passengers;
+            sem_post_chk(ipc.sem_state);
+            if (onboard == 0) break;
+            sleep_ms(50);
+        }
+
+        logf(&lg, "captain", "unloading complete");
         logf(&lg, "captain",
             "TRIP SUMMARY trip=%d route=%s passengers=%d bikes=%d left_bridge=%d",
             my_trip, dir_str(trip_dir), trip_boarded_pax, trip_boarded_bikes, trip_left_bridge);
 
-        logf(&lg, "captain", "departing after LOADING -> END (stub)");
         set_phase(&ipc, &lg, PHASE_END, 0);
         break;
     }
