@@ -281,17 +281,13 @@ int main(int argc, char** argv) {
             break;
         }
 
+        // jeœli stop przyszed³ w trakcie rejsu -> koñczymy po bie¿¹cym rejsie (jesteœmy po dop³yniêciu)
+        if (g_stop) {
+            logf(&lg, "captain", "stop after trip completion -> END");
+            set_phase(&ipc, &lg, PHASE_END, 0);
+            break;
+        }
+
         // prze³¹cz kierunek na rejs powrotny
         sem_wait_nointr(ipc.sem_state);
-        ipc.shm->direction = (ipc.shm->direction == DIR_KRAKOW_TO_TYNIEC)
-            ? DIR_TYNIEC_TO_KRAKOW : DIR_KRAKOW_TO_TYNIEC;
-        sem_post_chk(ipc.sem_state);
-    }
-
-    logf(&lg, "captain", "EXIT (g_exit=%d g_stop=%d g_early_depart=%d)",
-        (int)g_exit, (int)g_stop, (int)g_early_depart);
-
-    logger_close(&lg);
-    ipc_close(&ipc);
-    return 0;
-}
+        ipc.shm->direction =
