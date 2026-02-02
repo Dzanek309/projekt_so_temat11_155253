@@ -142,13 +142,16 @@ int main(int argc, char** argv) {
 
     logf(&lg, "captain", "started; shm=%s msqid=%d", a.shm_name, ipc.msqid);
 
-    // ====== STUB: jeden rejs: LOADING -> DEPARTING -> SAILING -> UNLOADING -> END ======
+    int trips_done = 0;
+
+    // ====== STUB: cykle rejsów, zakoñcz po R ======
     while (!g_exit) {
         // SprawdŸ shutdown z launchera
         sem_wait_nointr(ipc.sem_state);
         int shutdown = ipc.shm->shutdown;
         int t1 = ipc.shm->T1_ms;
         int t2 = ipc.shm->T2_ms;
+        int rmax = ipc.shm->R;
         sem_post_chk(ipc.sem_state);
 
         if (shutdown) {
@@ -271,8 +274,18 @@ int main(int argc, char** argv) {
             "TRIP SUMMARY trip=%d route=%s passengers=%d bikes=%d left_bridge=%d",
             my_trip, dir_str(trip_dir), trip_boarded_pax, trip_boarded_bikes, trip_left_bridge);
 
-        set_phase(&ipc, &lg, PHASE_END, 0);
-        break;
+        trips_done++;
+        if (trips_done >= rmax) {
+            logf(&lg, "captain", "max trips R=%d reached -> END", rmax);
+            set_phase(&ipc, &lg, PHASE_END, 0);
+            break;
+        }
+
+        // prze³¹cz kierunek na rejs powrotny
+        sem_wait_nointr(ipc.sem_state);
+        ipc.shm->direction = (ipc.shm->direction == DIR_KRAKOW_TO_TYNIEC)
+            ? DIR_TYNIEC_TO_KRAKOW : DIR_KRAKOW_TO_TYNIEC;
+        sem_post_chk(ipc.sem_state);
     }
 
     logf(&lg, "captain", "EXIT (g_exit=%d g_stop=%d g_early_depart=%d)",
