@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -37,6 +38,20 @@ static void spawn_exec(const char* path, char* const argvv[], pid_t* out_pid) {
     if (out_pid) *out_pid = pid;
 }
 
+static int proc_limit_ok(int want_children) {
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NPROC, &rl) != 0) {
+        perror("getrlimit(RLIMIT_NPROC)");
+        return 1; // nie blokuj jeśli nie da się odczytać
+    }
+    if (rl.rlim_cur == RLIM_INFINITY) return 1;
+
+    // Minimalny check: jeśli limit jest bardzo niski, ostrzeż
+    // W praktyce i tak fork() zwróci błąd
+    if ((unsigned long)want_children + 20 > (unsigned long)rl.rlim_cur) return 0;
+    return 1;
+}
+
 static void sem_wait_nointr(sem_t* s) {
     while (sem_wait(s) != 0) {
         if (errno == EINTR) continue;
@@ -60,6 +75,14 @@ int main(int argc, char** argv) {
     }
 
     umask(0077);
+
+    // Limit procesów: launcher + captain + dispatcher + P
+    int want_children = 2 + args.P;
+    if (!proc_limit_ok(want_children)) {
+        fprintf(stderr, "Refusing to spawn %d children: RLIMIT_NPROC too low\n", want_children);
+        return 2;
+    }
+
     install_handlers();
 
     // Unikalne nazwy IPC zależne od PID launchera
