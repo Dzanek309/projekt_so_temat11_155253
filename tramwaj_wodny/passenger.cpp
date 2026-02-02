@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/msg.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_exit = 0;
@@ -49,6 +50,93 @@ static int desired_dir_ok(const shm_state_t* s, int desired_dir) {
     return (int)s->direction == desired_dir;
 }
 
+static void passenger_send_ack(ipc_handles_t* ipc, int trip_no) {
+    msg_ack_t ack;
+    ack.mtype = 1; // CAPTAIN mtype
+    ack.pid = getpid();
+    ack.trip_no = trip_no;
+
+    if (msgsnd(ipc->msqid, &ack, sizeof(ack) - sizeof(long), 0) != 0) {
+        perror("msgsnd(ACK)");
+    }
+}
+
+static int read_trip_no(ipc_handles_t* ipc) {
+    sem_wait_nointr(ipc->sem_state);
+    int t = ipc->shm->trip_no;
+    sem_post_chk(ipc->sem_state);
+    return t;
+}
+
+// Obs³uga wymuszonego zejœcia w kolejnoœci LIFO:
+// - czekamy a¿ dir=OUT
+// - czekamy a¿ bêdziemy na back
+// - pop_back
+// - zwalniamy mostek + rezerwacje
+static void passenger_handle_evict(ipc_handles_t* ipc, logger_t* lg,
+    int units, int has_bike, int trip_no,
+    bool* seat_reserved, bool* bike_reserved,
+    int* bridge_units_held) {
+    logf(lg, "passenger", "evict handling start (trip=%d)", trip_no);
+
+    // czekaj a¿ kapitan ustawi dir OUT
+    for (;;) {
+        if (g_exit) return;
+
+        sem_wait_nointr(ipc->sem_state);
+        bridge_dir_t d = ipc->shm->bridge.dir;
+        sem_post_chk(ipc->sem_state);
+
+        if (d != BRIDGE_DIR_OUT) {
+            sleep_ms(10);
+            continue;
+        }
+
+        // czekamy a¿ bêdziemy na back (LIFO)
+        for (;;) {
+            if (g_exit) return;
+
+            sem_wait_nointr(ipc->sem_state);
+            bridge_node_t* b = bridge_back(ipc->shm);
+
+            if (b && b->pid == getpid()) {
+                bridge_node_t out;
+                bridge_pop_back(ipc->shm, &out);
+
+                if (ipc->shm->bridge.count == 0) ipc->shm->bridge.dir = BRIDGE_DIR_NONE;
+
+                sem_post_chk(ipc->sem_state);
+
+                // zwolnij zasoby (mostek + rezerwacje statku)
+                if (bridge_units_held && *bridge_units_held > 0) {
+                    release_n(ipc->sem_bridge, *bridge_units_held);
+                    *bridge_units_held = 0;
+                }
+                else {
+                    // fallback: jeœli nie wiemy ile trzymaliœmy, zwolnij tyle ile wynika z units
+                    release_n(ipc->sem_bridge, units);
+                }
+
+                if (seat_reserved && *seat_reserved) {
+                    sem_post_chk(ipc->sem_seats);
+                    *seat_reserved = false;
+                }
+                if (has_bike && bike_reserved && *bike_reserved) {
+                    sem_post_chk(ipc->sem_bikes);
+                    *bike_reserved = false;
+                }
+
+                passenger_send_ack(ipc, trip_no);
+                logf(lg, "passenger", "left bridge due to evict (LIFO), trip=%d", trip_no);
+                return;
+            }
+
+            sem_post_chk(ipc->sem_state);
+            sleep_ms(10);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     cli_args_t a;
     int r = cli_parse_passenger(argc, argv, &a);
@@ -81,13 +169,21 @@ int main(int argc, char** argv) {
     bool seat_reserved = false;
     bool bike_reserved = false;
     int  bridge_units_held = 0; // 0..units
-    int  on_bridge = 0;
     int  boarded = 0;
 
     const int64_t kGiveUpMs = 15000; // 15s
     const int64_t start = now_ms_monotonic();
 
     while (!g_exit) {
+        // odbierz ewentualne CMD_EVICT (nieblokuj¹co)
+        msg_cmd_t cmd;
+        ssize_t ncmd = msgrcv(ipc.msqid, &cmd, sizeof(cmd) - sizeof(long), (long)me, IPC_NOWAIT);
+        if (ncmd >= 0 && cmd.cmd == CMD_EVICT) {
+            passenger_handle_evict(&ipc, &lg, units, has_bike, cmd.trip_no,
+                &seat_reserved, &bike_reserved, &bridge_units_held);
+            goto finish;
+        }
+
         // snapshot stanu
         sem_wait_nointr(ipc.sem_state);
         shm_state_t snapshot = *ipc.shm;
@@ -98,7 +194,7 @@ int main(int argc, char** argv) {
             break;
         }
 
-        // timeout na próbê wejœcia (zanim wejdziemy na mostek)
+        // timeout na próbê wejœcia
         if (!boarded && (now_ms_monotonic() - start >= kGiveUpMs)) {
             logf(&lg, "passenger", "give up after %lldms without boarding",
                 (long long)kGiveUpMs);
@@ -126,7 +222,6 @@ int main(int argc, char** argv) {
         // rezerwuj rower (opcjonalnie)
         if (has_bike && !bike_reserved) {
             if (sem_trywait_chk(ipc.sem_bikes) != 0) {
-                // rollback seat
                 sem_post_chk(ipc.sem_seats);
                 seat_reserved = false;
                 sleep_ms(10);
@@ -212,7 +307,6 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        on_bridge = 1;
         sem_post_chk(ipc.sem_state);
 
         logf(&lg, "passenger", "entered bridge (dir IN), waiting to board");
@@ -222,17 +316,28 @@ int main(int argc, char** argv) {
 
         // czekaj a¿ bêdziesz z przodu i boarding wci¹¿ otwarty
         while (!g_exit) {
+            // odbierz CMD_EVICT w trakcie oczekiwania
+            ssize_t n2 = msgrcv(ipc.msqid, &cmd, sizeof(cmd) - sizeof(long), (long)me, IPC_NOWAIT);
+            if (n2 >= 0 && cmd.cmd == CMD_EVICT) {
+                passenger_handle_evict(&ipc, &lg, units, has_bike, cmd.trip_no,
+                    &seat_reserved, &bike_reserved, &bridge_units_held);
+                goto finish;
+            }
+
             sem_wait_nointr(ipc.sem_state);
 
+            // jeœli boarding zamkniêty albo faza != LOADING -> zejdŸ LIFO (jak przy evict)
             if (ipc.shm->phase != PHASE_LOADING || ipc.shm->boarding_open == 0) {
                 sem_post_chk(ipc.sem_state);
-                // w tej wersji: bez ewakuacji LIFO, po prostu wyjœcie (cleanup poni¿ej)
-                logf(&lg, "passenger", "boarding closed while on bridge -> exit (stub)");
+
+                int trip = read_trip_no(&ipc);
+                passenger_handle_evict(&ipc, &lg, units, has_bike, trip,
+                    &seat_reserved, &bike_reserved, &bridge_units_held);
                 goto finish;
             }
 
             bridge_node_t* fr = bridge_front(ipc.shm);
-            if (fr && fr->pid == me) {
+            if (fr && fr->pid == me && fr->evicting == 0) {
                 bridge_node_t out;
                 bridge_pop_front(ipc.shm, &out);
                 if (ipc.shm->bridge.count == 0) ipc.shm->bridge.dir = BRIDGE_DIR_NONE;
@@ -248,7 +353,6 @@ int main(int argc, char** argv) {
                 // zszed³em z mostka -> zwalniam mostek
                 release_n(ipc.sem_bridge, bridge_units_held);
                 bridge_units_held = 0;
-                on_bridge = 0;
 
                 boarded = 1;
                 logf(&lg, "passenger", "BOARDED ship (onboard=%d bikes=%d)", onboard, bikes);
@@ -263,17 +367,17 @@ int main(int argc, char** argv) {
     }
 
 finish:
-    // cleanup zasobów (stub)
+    // best-effort cleanup: jeœli jeszcze trzymamy mostek, oddaj
     if (bridge_units_held > 0) {
         release_n(ipc.sem_bridge, bridge_units_held);
         bridge_units_held = 0;
     }
 
-    // jeœli staliœmy na mostku i nie weszliœmy na statek, nie usuwamy wpisu z kolejki (naprawimy w kolejnym commicie)
-    (void)on_bridge;
-
-    if (bike_reserved) { sem_post_chk(ipc.sem_bikes); bike_reserved = false; }
-    if (seat_reserved) { sem_post_chk(ipc.sem_seats); seat_reserved = false; }
+    // jeœli nie weszliœmy na statek, oddaj rezerwacje
+    if (!boarded) {
+        if (bike_reserved) { sem_post_chk(ipc.sem_bikes); bike_reserved = false; }
+        if (seat_reserved) { sem_post_chk(ipc.sem_seats); seat_reserved = false; }
+    }
 
     logf(&lg, "passenger", "EXIT (boarded=%d exit_flag=%d)", boarded, (int)g_exit);
 
