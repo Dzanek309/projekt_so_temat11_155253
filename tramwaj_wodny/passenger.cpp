@@ -217,7 +217,6 @@ int main(int argc, char** argv) {
                 continue;
             }
             seat_reserved = true;
-            logf(&lg, "passenger", "reserved seat");
         }
 
         // rezerwuj rower (opcjonalnie)
@@ -229,7 +228,6 @@ int main(int argc, char** argv) {
                 continue;
             }
             bike_reserved = true;
-            logf(&lg, "passenger", "reserved bike slot");
         }
 
         // rezerwuj mostek (units)

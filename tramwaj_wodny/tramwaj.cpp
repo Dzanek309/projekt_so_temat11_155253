@@ -148,6 +148,9 @@ int main(int argc, char** argv) {
     if (sem_post(ipc.sem_state) != 0) die_perror("sem_post");
 
     // Spawn dispatcher
+    char captain_pid_buf[32];
+    snprintf(captain_pid_buf, sizeof(captain_pid_buf), "%d", (int)captain_pid);
+
     char* dispatcher_argv[] = {
       (char*)"./dispatcher",
       (char*)"--shm", shm_name,
