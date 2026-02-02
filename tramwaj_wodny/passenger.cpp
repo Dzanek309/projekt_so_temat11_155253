@@ -1,4 +1,3 @@
-// passenger.cpp
 #include "common.h"
 #include "ipc.h"
 #include "cli.h"
@@ -35,6 +34,14 @@ static void sem_post_chk(sem_t* s) {
     if (sem_post(s) != 0) die_perror("sem_post");
 }
 
+static int should_exit_from_shm(ipc_handles_t* ipc) {
+    sem_wait_nointr(ipc->sem_state);
+    int shutdown = ipc->shm->shutdown;
+    int end_phase = (ipc->shm->phase == PHASE_END);
+    sem_post_chk(ipc->sem_state);
+    return (shutdown || end_phase);
+}
+
 int main(int argc, char** argv) {
     cli_args_t a;
     int r = cli_parse_passenger(argc, argv, &a);
@@ -56,18 +63,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    logf(&lg, "passenger", "started pid=%d desired_dir=%d bike_flag=%d",
-        (int)getpid(), (int)a.desired_dir, (int)a.bike_flag);
+    logf(&lg, "passenger", "started dir=%d bike=%d (skeleton)",
+        (int)a.desired_dir, (int)a.bike_flag);
 
-    // Na razie: tylko czekamy a¿ symulacja siê skoñczy (END/shutdown).
     while (!g_exit) {
-        sem_wait_nointr(ipc.sem_state);
-        int shutdown = ipc.shm->shutdown;
-        phase_t ph = ipc.shm->phase;
-        sem_post_chk(ipc.sem_state);
-
-        if (shutdown || ph == PHASE_END) break;
+        if (should_exit_from_shm(&ipc)) break;
         sleep_ms(100);
+        break; // na razie: tylko szkielet, bez logiki wejœcia/wyjœcia
     }
 
     logf(&lg, "passenger", "EXIT (g_exit=%d)", (int)g_exit);
