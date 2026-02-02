@@ -45,9 +45,6 @@ static int proc_limit_ok(int want_children) {
         return 1; // nie blokuj jeśli nie da się odczytać
     }
     if (rl.rlim_cur == RLIM_INFINITY) return 1;
-
-    // Minimalny check: jeśli limit jest bardzo niski, ostrzeż
-    // W praktyce i tak fork() zwróci błąd
     if ((unsigned long)want_children + 20 > (unsigned long)rl.rlim_cur) return 0;
     return 1;
 }
@@ -76,7 +73,6 @@ int main(int argc, char** argv) {
 
     umask(0077);
 
-    // Limit procesów: launcher + captain + dispatcher + P
     int want_children = 2 + args.P;
     if (!proc_limit_ok(want_children)) {
         fprintf(stderr, "Refusing to spawn %d children: RLIMIT_NPROC too low\n", want_children);
@@ -85,14 +81,12 @@ int main(int argc, char** argv) {
 
     install_handlers();
 
-    // Unikalne nazwy IPC zależne od PID launchera
     pid_t launcher_pid = getpid();
     char shm_name[128];
     char sem_prefix[128];
     snprintf(shm_name, sizeof(shm_name), "/tramwaj_shm_%d", (int)launcher_pid);
     snprintf(sem_prefix, sizeof(sem_prefix), "/tramwaj_%d", (int)launcher_pid);
 
-    // Stan początkowy SHM
     shm_state_t init;
     memset(&init, 0, sizeof(init));
     init.N = args.N;
@@ -150,7 +144,6 @@ int main(int argc, char** argv) {
     spawn_exec("./captain", captain_argv, &captain_pid);
     logf(&lg, "launcher", "spawned captain pid=%d", (int)captain_pid);
 
-    // zapisz PID kapitana do SHM
     sem_wait_nointr(ipc.sem_state);
     ipc.shm->captain_pid = captain_pid;
     sem_post_chk(ipc.sem_state);
@@ -168,7 +161,42 @@ int main(int argc, char** argv) {
     spawn_exec("./dispatcher", dispatcher_argv, &dispatcher_pid);
     logf(&lg, "launcher", "spawned dispatcher pid=%d", (int)dispatcher_pid);
 
-    int alive = 2;
+    // Spawn passengers
+    srand((unsigned)launcher_pid);
+
+    pid_t* passenger_pids = (pid_t*)calloc((size_t)args.P, sizeof(pid_t));
+    if (!passenger_pids && args.P > 0) die_perror("calloc");
+
+    for (int i = 0; i < args.P; i++) {
+        if (g_shutdown) break;
+
+        int dir = rand() % 2;
+        double r01 = (double)rand() / (double)RAND_MAX;
+        int bike = (r01 < args.bike_prob) ? 1 : 0;
+
+        char dir_buf[8], bike_buf[8];
+        snprintf(dir_buf, sizeof(dir_buf), "%d", dir);
+        snprintf(bike_buf, sizeof(bike_buf), "%d", bike);
+
+        char* pass_argv[] = {
+            (char*)"./passenger",
+            (char*)"--shm", shm_name,
+            (char*)"--sem-prefix", sem_prefix,
+            (char*)"--msqid", msqid_buf,
+            (char*)"--log", args.log_path,
+            (char*)"--dir", dir_buf,
+            (char*)"--bike", bike_buf,
+            NULL
+        };
+
+        pid_t pp = -1;
+        spawn_exec("./passenger", pass_argv, &pp);
+        passenger_pids[i] = pp;
+
+        sleep_ms(2);
+    }
+
+    int alive = want_children;
     while (alive > 0) {
         if (g_shutdown) {
             logf(&lg, "launcher", "shutdown requested -> set flag + SIGTERM children");
@@ -181,6 +209,12 @@ int main(int argc, char** argv) {
 
             if (captain_pid > 1) kill(captain_pid, SIGTERM);
             if (dispatcher_pid > 1) kill(dispatcher_pid, SIGTERM);
+            for (int i = 0; i < args.P; i++) {
+                if (passenger_pids && passenger_pids[i] > 1) kill(passenger_pids[i], SIGTERM);
+            }
+
+            // daj czas na wyjście
+            sleep_ms(200);
 
             g_shutdown = 0;
         }
@@ -200,5 +234,6 @@ int main(int argc, char** argv) {
 
     ipc_close(&ipc);
     ipc_destroy(shm_name, sem_prefix, msqid);
+    free(passenger_pids);
     return 0;
 }
