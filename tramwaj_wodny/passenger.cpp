@@ -169,6 +169,7 @@ int main(int argc, char** argv) {
     bool seat_reserved = false;
     bool bike_reserved = false;
     int  bridge_units_held = 0; // 0..units
+    bool onboard_counted = false;
     int  boarded = 0;
 
     const int64_t kGiveUpMs = 15000; // 15s
@@ -354,6 +355,7 @@ int main(int argc, char** argv) {
                 release_n(ipc.sem_bridge, bridge_units_held);
                 bridge_units_held = 0;
 
+                onboard_counted = true;
                 boarded = 1;
                 logf(&lg, "passenger", "BOARDED ship (onboard=%d bikes=%d)", onboard, bikes);
                 break;
@@ -366,6 +368,75 @@ int main(int argc, char** argv) {
         break; // po próbie wejœcia na statek koñczymy
     }
 
+    if (!boarded) {
+        logf(&lg, "passenger", "did not board (timeout or shutdown)");
+        goto finish;
+    }
+
+    // Czekaj na UNLOADING i wyjdŸ ze statku (DIR_OUT)
+    while (!g_exit) {
+        sem_wait_nointr(ipc.sem_state);
+        phase_t ph = ipc.shm->phase;
+        int shutdown = ipc.shm->shutdown;
+        sem_post_chk(ipc.sem_state);
+
+        if (shutdown || ph == PHASE_END) goto finish;
+        if (ph == PHASE_UNLOADING) break;
+        sleep_ms(20);
+    }
+
+    // zejœcie: zajmij mostek units
+    for (int i = 0; i < units; i++) {
+        sem_wait_nointr(ipc.sem_bridge);
+        bridge_units_held++;
+    }
+
+    sem_wait_nointr(ipc.sem_state);
+    if (ipc.shm->bridge.dir == BRIDGE_DIR_NONE) ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
+
+    // wejœcie od strony statku
+    bridge_node_t node2;
+    node2.pid = me;
+    node2.units = (uint8_t)units;
+    node2.evicting = 0;
+    (void)bridge_push_front(ipc.shm, node2);
+    sem_post_chk(ipc.sem_state);
+
+    sleep_ms(30);
+
+    // zejœcie na l¹d: tylko back w DIR_OUT
+    for (;;) {
+        if (g_exit) goto finish;
+
+        sem_wait_nointr(ipc.sem_state);
+        bridge_node_t* bk = bridge_back(ipc.shm);
+        if (bk && bk->pid == me) {
+            bridge_node_t out;
+            bridge_pop_back(ipc.shm, &out);
+            if (ipc.shm->bridge.count == 0) ipc.shm->bridge.dir = BRIDGE_DIR_NONE;
+
+            ipc.shm->onboard_passengers -= 1;
+            if (has_bike) ipc.shm->onboard_bikes -= 1;
+
+            sem_post_chk(ipc.sem_state);
+
+            // zwolnij mostek
+            release_n(ipc.sem_bridge, bridge_units_held);
+            bridge_units_held = 0;
+
+            // zwolnij miejsce na statku i rower
+            if (seat_reserved) { sem_post_chk(ipc.sem_seats); seat_reserved = false; }
+            if (bike_reserved) { sem_post_chk(ipc.sem_bikes); bike_reserved = false; }
+
+            onboard_counted = false;
+            logf(&lg, "passenger", "LEFT ship and freed resources");
+            break;
+        }
+
+        sem_post_chk(ipc.sem_state);
+        sleep_ms(10);
+    }
+
 finish:
     // best-effort cleanup: jeœli jeszcze trzymamy mostek, oddaj
     if (bridge_units_held > 0) {
@@ -373,11 +444,17 @@ finish:
         bridge_units_held = 0;
     }
 
-    // jeœli nie weszliœmy na statek, oddaj rezerwacje
-    if (!boarded) {
-        if (bike_reserved) { sem_post_chk(ipc.sem_bikes); bike_reserved = false; }
-        if (seat_reserved) { sem_post_chk(ipc.sem_seats); seat_reserved = false; }
+    if (onboard_counted) {
+        // awaryjnie skoryguj liczniki (¿eby kapitan nie wisia³)
+        sem_wait_nointr(ipc.sem_state);
+        if (ipc.shm->onboard_passengers > 0) ipc.shm->onboard_passengers -= 1;
+        if (has_bike && ipc.shm->onboard_bikes > 0) ipc.shm->onboard_bikes -= 1;
+        sem_post_chk(ipc.sem_state);
+        onboard_counted = false;
     }
+
+    if (seat_reserved) { sem_post_chk(ipc.sem_seats); seat_reserved = false; }
+    if (bike_reserved) { sem_post_chk(ipc.sem_bikes); bike_reserved = false; }
 
     logf(&lg, "passenger", "EXIT (boarded=%d exit_flag=%d)", boarded, (int)g_exit);
 
