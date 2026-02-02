@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 static void build_sem_name(char* out, size_t out_sz, const char* prefix, const char* suffix) {
+    // sem name must start with '/'
     snprintf(out, out_sz, "%s_%s", prefix, suffix);
 }
 
@@ -144,7 +145,7 @@ int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
 
     // SHM unlink
     if (shm_unlink(shm_name) != 0) {
-        // nie traktuj jako fatal
+        // mo¿e ju¿ usuniête; nie traktuj jako fatal
         perror("shm_unlink");
     }
 

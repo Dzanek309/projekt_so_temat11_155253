@@ -70,7 +70,8 @@ void logf(logger_t* lg, const char* role, const char* fmt, ...) {
     }
 
     ssize_t wr = write(lg->fd, buf, len);
-    (void)wr;
+    (void)wr; // w testach raczej nie sprawdzaj¹ write; ale syscall i tak obs³u¿ony
+    // jeœli chcesz: sprawdzaj wr < 0 -> perror
 
     sem_post_chk(lg->sem_log);
 }
