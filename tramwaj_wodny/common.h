@@ -14,7 +14,7 @@ extern "C" {
 	// ======= Limity kompilacyjne =======
 	// MAX_K / MAX_P to "bezpieczniki" na rozmiar SHM i liczbê procesów.
 	enum { MAX_K = 512 };
-	enum { MAX_P = 1000 };
+	enum { MAX_P = 5000 };
 	enum { BRIDGE_Q_CAP = 1024 }; // >= MAX_K (z zapasem)
 
 	// ======= Stany i kierunki =======

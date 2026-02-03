@@ -49,6 +49,27 @@ static void release_n(sem_t* s, int n) {
     for (int i = 0; i < n; i++) sem_post_chk(s);
 }
 
+// Dziêki temu proces nie blokuje siê trzymaj¹c 1 jednostkê i czekaj¹c na drug¹.
+static int acquire_units_atomic(sem_t* s, int units) {
+    for (;;) {
+        if (g_exit) return -1;
+
+        int got = 0;
+        for (int i = 0; i < units; i++) {
+            if (sem_trywait_chk(s) != 0) {
+                // rollback czêœciowego zajêcia
+                if (got > 0) release_n(s, got);
+                got = -1;
+                break;
+            }
+            got++;
+        }
+
+        if (got == units) return units;
+        sleep_ms(5);
+    }
+}
+
 static void passenger_send_ack(ipc_handles_t* ipc, int trip_no) {
     msg_ack_t ack;
     ack.mtype = 1; // CAPTAIN mtype
@@ -388,9 +409,11 @@ int main(int argc, char** argv) {
     }
 
     // zejœcie: zajmij mostek units
-    for (int i = 0; i < units; i++) {
-        sem_wait_nointr(ipc.sem_bridge);
-        bridge_units_held++;
+    // ===== FIX: atomowo (trywait+rollback), ¿eby nie blokowaæ siê trzymaj¹c 1/2 zasobu =====
+    {
+        int gotu = acquire_units_atomic(ipc.sem_bridge, units);
+        if (gotu < 0) goto finish;
+        bridge_units_held = gotu;
     }
 
     sem_wait_nointr(ipc.sem_state);
@@ -458,7 +481,7 @@ finish:
     if (seat_reserved) { sem_post_chk(ipc.sem_seats); seat_reserved = false; }
     if (bike_reserved) { sem_post_chk(ipc.sem_bikes); bike_reserved = false; }
 
-    // <<< DODANE: log zakoñczenia procesu pasa¿era >>>
+    // log zakoñczenia procesu pasa¿era
     logf(&lg, "passenger",
         "EXIT (boarded=%d exit_flag=%d)",
         boarded, (int)g_exit);
