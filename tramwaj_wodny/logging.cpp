@@ -69,9 +69,15 @@ void logf(logger_t* lg, const char* role, const char* fmt, ...) {
         }
     }
 
-    ssize_t wr = write(lg->fd, buf, len);
-    (void)wr; // w testach raczej nie sprawdzaj¹ write; ale syscall i tak obs³u¿ony
-    // jeœli chcesz: sprawdzaj wr < 0 -> perror
+    size_t written = 0;
+    while (written < len) {
+        ssize_t wr = write(lg->fd, buf + written, len - written);
+        if (wr < 0) {
+            perror("write(log)");
+            break;
+        }
+        written += (size_t)wr;
+    }
 
     sem_post_chk(lg->sem_log);
 }

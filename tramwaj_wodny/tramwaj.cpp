@@ -148,9 +148,6 @@ int main(int argc, char** argv) {
     if (sem_post(ipc.sem_state) != 0) die_perror("sem_post");
 
     // Spawn dispatcher
-    char captain_pid_buf[32];
-    snprintf(captain_pid_buf, sizeof(captain_pid_buf), "%d", (int)captain_pid);
-
     char* dispatcher_argv[] = {
       (char*)"./dispatcher",
       (char*)"--shm", shm_name,
@@ -195,8 +192,6 @@ int main(int argc, char** argv) {
         pid_t pp = -1;
         spawn_exec("./passenger", pass_argv, &pp);
         passenger_pids[i] = pp;
-
-        // drobne rozproszenie startu, żeby nie "zabić" systemu testów
         sleep_ms(2);
     }
 
@@ -213,17 +208,34 @@ int main(int argc, char** argv) {
             ipc.shm->boarding_open = 0;
             if (sem_post(ipc.sem_state) != 0) die_perror("sem_post");
 
-            // SIGTERM do wszystkich dzieci
-            if (captain_pid > 1) kill(captain_pid, SIGTERM);
-            if (dispatcher_pid > 1) kill(dispatcher_pid, SIGTERM);
-            for (int i = 0; i < args.P; i++) if (passenger_pids && passenger_pids[i] > 1) kill(passenger_pids[i], SIGTERM);
+            if (captain_pid > 1) {
+                if (kill(captain_pid, SIGTERM) != 0) perror("kill(SIGTERM captain)");
+            }
+            if (dispatcher_pid > 1) {
+                if (kill(dispatcher_pid, SIGTERM) != 0) perror("kill(SIGTERM dispatcher)");
+            }
+            for (int i = 0; i < args.P; i++) {
+                if (passenger_pids && passenger_pids[i] > 1) {
+                    if (kill(passenger_pids[i], SIGTERM) != 0) perror("kill(SIGTERM passenger)");
+                }
+            }
 
             // daj czas na wyjście
             sleep_ms(200);
+
             // a potem SIGKILL jeśli ktoś wisi
-            if (captain_pid > 1) kill(captain_pid, SIGKILL);
-            if (dispatcher_pid > 1) kill(dispatcher_pid, SIGKILL);
-            for (int i = 0; i < args.P; i++) if (passenger_pids && passenger_pids[i] > 1) kill(passenger_pids[i], SIGKILL);
+            if (captain_pid > 1) {
+                if (kill(captain_pid, SIGKILL) != 0) perror("kill(SIGKILL captain)");
+            }
+            if (dispatcher_pid > 1) {
+                if (kill(dispatcher_pid, SIGKILL) != 0) perror("kill(SIGKILL dispatcher)");
+            }
+            for (int i = 0; i < args.P; i++) {
+                if (passenger_pids && passenger_pids[i] > 1) {
+                    if (kill(passenger_pids[i], SIGKILL) != 0) perror("kill(SIGKILL passenger)");
+                }
+            }
+            // =====================================================
 
             g_shutdown = 0; // żeby nie powtarzać
         }
