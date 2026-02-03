@@ -173,7 +173,7 @@ int cli_parse_passenger(int argc, char** argv, cli_args_t* out) {
         if (streq(k, "--dir") && need_arg(i, argc)) {             // kierunek (0/1)
             int32_t d;
             if (parse_i32(argv[++i], &d) != 0) return -1;
-            out->desired_dir = d;                                 // zapis (walidacja zakresu prawdopodobnie gdzie indziej)
+            out->desired_dir = d;                                 // zapis
         }
         else if (streq(k, "--bike") && need_arg(i, argc)) {        // flaga roweru (0/1)
             int32_t b;
@@ -181,5 +181,17 @@ int cli_parse_passenger(int argc, char** argv, cli_args_t* out) {
             out->bike_flag = b;
         }
     }
-    return 0;                                                 // sukces
+
+    // --dir: dozwolone {0,1} albo -1 (losowo/nieustawione)
+    if (!(out->desired_dir == -1 || out->desired_dir == 0 || out->desired_dir == 1)) {
+        fprintf(stderr, "Invalid --dir: %d (allowed: 0, 1)\n", (int)out->desired_dir);
+        return -1;
+    }
+    // --bike: dozwolone {0,1} albo -1 (losowo/nieustawione)
+    if (!(out->bike_flag == -1 || out->bike_flag == 0 || out->bike_flag == 1)) {
+        fprintf(stderr, "Invalid --bike: %d (allowed: 0, 1)\n", (int)out->bike_flag);
+        return -1;
+    }
+
+    return 0;
 }

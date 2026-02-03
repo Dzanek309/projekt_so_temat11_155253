@@ -89,13 +89,27 @@ int main(int argc, char** argv) {
             sem_prefix = need_val("--sem-prefix"); // ustaw prefiks semaforów
         }
         else if (strcmp(a, "--msqid") == 0) {
-            msqid = atoi(need_val("--msqid"));     // parsuj id kolejki (bez walidacji b³êdów atoi)
+            const char* v = need_val("--msqid");
+            int32_t tmp;
+            if (parse_i32(v, &tmp) != 0 || tmp < 0) {
+                fprintf(stderr, "Invalid value for --msqid: %s (must be >= 0)\n", v);
+                usage();
+                return 2;
+            }
+            msqid = (int)tmp;
         }
         else if (strcmp(a, "--log") == 0) {
             log_path = need_val("--log");     // ustaw œcie¿kê loga
         }
         else if (strcmp(a, "--captain-pid") == 0) {
-            captain_pid = (pid_t)atoi(need_val("--captain-pid")); // PID kapitana w trybie legacy / override
+            const char* v = need_val("--captain-pid");
+            int32_t tmp;
+            if (parse_i32(v, &tmp) != 0 || tmp <= 1) {
+                fprintf(stderr, "Invalid value for --captain-pid: %s (must be > 1)\n", v);
+                usage();
+                return 2;
+            }
+            captain_pid = (pid_t)tmp;
         }
         else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
             usage();                          // poka¿ pomoc
@@ -145,8 +159,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "dispatcher: running in LEGACY mode (no IPC)\n"); // tryb bez SHM/sem/msq
     }
 
-    if (captain_pid <= 0) {                   // PID musi byæ dodatni
-        fprintf(stderr, "dispatcher: captain pid unknown (provide --captain-pid or IPC args)\n");
+    if (captain_pid <= 1) {                   // PID musi byæ >1
+        fprintf(stderr, "dispatcher: captain pid unknown/invalid (provide --captain-pid > 1 or IPC args)\n");
         if (ipc_opened) { logger_close(&lg); ipc_close(&ipc); }  // sprz¹tnij jeœli coœ otwarte
         return 2;
     }
