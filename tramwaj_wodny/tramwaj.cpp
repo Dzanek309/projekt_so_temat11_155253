@@ -192,7 +192,6 @@ int main(int argc, char** argv) {
         pid_t pp = -1;
         spawn_exec("./passenger", pass_argv, &pp);
         passenger_pids[i] = pp;
-        sleep_ms(2);
     }
 
     // główna pętla czekania

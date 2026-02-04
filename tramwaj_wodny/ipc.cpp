@@ -12,7 +12,6 @@
 #include <unistd.h>
 
 static void build_sem_name(char* out, size_t out_sz, const char* prefix, const char* suffix) {
-    // sem name must start with '/'
     snprintf(out, out_sz, "%s_%s", prefix, suffix);
 }
 
@@ -76,7 +75,6 @@ int ipc_create(ipc_handles_t* h, const char* shm_name, const char* sem_prefix,
     h->sem_bridge = sem_open_create(name, (unsigned)initial_state->K);
     if (h->sem_bridge == SEM_FAILED) return -1;
 
-    // Message queue (SysV)
     int msqid = msgget(IPC_PRIVATE, IPC_CREAT | IPC_EXCL | 0600);
     if (msqid < 0) { perror("msgget"); return -1; }
     h->msqid = msqid;

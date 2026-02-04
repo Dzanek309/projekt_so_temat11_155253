@@ -48,11 +48,11 @@ static const char* dir_str(int d) {
     return (d == DIR_KRAKOW_TO_TYNIEC) ? "KRAKOW->TYNIEC" : "TYNIEC->KRAKOW";
 }
 
-// Kapitan wymusza zejœcie od koñca kolejki (LIFO) poprzez:
+// Kapitan wymusza zejï¿½cie od koï¿½ca kolejki (LIFO) poprzez:
 // - ustawienie phase=DEPARTING i boarding_open=0
 // - ustawienie bridge.dir = OUT
-// - pêtla: wybierz back, oznacz evicting, wyœlij CMD_EVICT(pid), czekaj na ACK
-// Dodatkowo: zliczamy ile OSÓB zesz³o z mostka (ile evictów).
+// - pï¿½tla: wybierz back, oznacz evicting, wyï¿½lij CMD_EVICT(pid), czekaj na ACK
+// Dodatkowo: zliczamy ile OSï¿½B zeszï¿½o z mostka (ile evictï¿½w).
 static void captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left_bridge_people) {
     int left_cnt = 0;
 
@@ -79,7 +79,7 @@ static void captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left
 
         sem_post_chk(ipc->sem_state);
 
-        // wyœlij polecenie ewakuacji do konkretnego PID (mtype=PID)
+        // wyï¿½lij polecenie ewakuacji do konkretnego PID (mtype=PID)
         msg_cmd_t cmd;
         cmd.mtype = (long)target;
         cmd.cmd = CMD_EVICT;
@@ -105,7 +105,7 @@ static void captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left
                 logf(lg, "captain", "ack from pid=%d (left_bridge=%d)", (int)target, left_cnt);
                 break;
             }
-            // Jeœli przyjdzie inny ack, ignorujemy (w praktyce rzadkie przy sekwencyjnym evict).
+            // Jeï¿½li przyjdzie inny ack, ignorujemy (w praktyce rzadkie przy sekwencyjnym evict).
         }
     }
 }
@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
     int trips_done = 0;
 
     while (!g_exit) {
-        // SprawdŸ shutdown z launchera
+        // Sprawdï¿½ shutdown z launchera
         sem_wait_nointr(ipc.sem_state);
         int shutdown = ipc.shm->shutdown;
         sem_post_chk(ipc.sem_state);
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
             break;
         }
 
-        // reset jednorazowego sygna³u "early depart" na start tripu
+        // reset jednorazowego sygnaï¿½u "early depart" na start tripu
         g_early_depart = 0;
 
         // ===== LOADING =====
@@ -164,17 +164,17 @@ int main(int argc, char** argv) {
         ipc.shm->trip_no += 1;
         int my_trip = ipc.shm->trip_no;
 
-        // snapshot kierunku dla statystyk tej podró¿y
+        // snapshot kierunku dla statystyk tej podrï¿½y
         int trip_dir = (int)ipc.shm->direction;
 
         ipc.shm->bridge.dir = BRIDGE_DIR_NONE;
         sem_post_chk(ipc.sem_state);
 
+        sleep(100);
         logf(&lg, "captain", "trip=%d direction=%d LOADING", my_trip, trip_dir);
-
         int64_t start = now_ms_monotonic();
         while (!g_exit) {
-            // jeœli sygna³2 dotar³ w trakcie za³adunku: statek nie wyp³ywa, pasa¿erowie opuszczaj¹ statek
+            // jeï¿½li sygnaï¿½2 dotarï¿½ w trakcie zaï¿½adunku: statek nie wypï¿½ywa, pasaï¿½erowie opuszczajï¿½ statek
             if (g_stop) {
                 logf(&lg, "captain", "stop during LOADING -> cancel trip and UNLOADING");
                 break;
@@ -191,19 +191,19 @@ int main(int argc, char** argv) {
             sleep_ms(20);
         }
 
-        // Zamknij boarding i przejdŸ do DEPARTING
+        // Zamknij boarding i przejdï¿½ do DEPARTING
         set_phase(&ipc, &lg, PHASE_DEPARTING, 0);
 
-        // wymuœ ruch OUT na mostku (¿eby nikt nie wchodzi³ na statek)
+        // wymuï¿½ ruch OUT na mostku (ï¿½eby nikt nie wchodziï¿½ na statek)
         sem_wait_nointr(ipc.sem_state);
         ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
         sem_post_chk(ipc.sem_state);
 
-        // wyczyœæ mostek od koñca (LIFO) + policz ile osób zesz³o z mostka
+        // wyczyï¿½ï¿½ mostek od koï¿½ca (LIFO) + policz ile osï¿½b zeszï¿½o z mostka
         int trip_left_bridge = 0;
         captain_clear_bridge(&ipc, &lg, &trip_left_bridge);
 
-        // snapshot: ilu faktycznie pop³ynie w tej podró¿y (po zamkniêciu boardingu i oczyszczeniu mostka)
+        // snapshot: ilu faktycznie popï¿½ynie w tej podrï¿½y (po zamkniï¿½ciu boardingu i oczyszczeniu mostka)
         int trip_boarded_pax = 0;
         int trip_boarded_bikes = 0;
         sem_wait_nointr(ipc.sem_state);
@@ -212,15 +212,15 @@ int main(int argc, char** argv) {
         sem_post_chk(ipc.sem_state);
 
         if (g_stop) {
-            // roz³adunek na miejscu (statek nie wyp³ywa)
+            // rozï¿½adunek na miejscu (statek nie wypï¿½ywa)
             set_phase(&ipc, &lg, PHASE_UNLOADING, 0);
 
-            // pozwól pasa¿erom zejœæ (kierunek mostka OUT)
+            // pozwï¿½l pasaï¿½erom zejï¿½ï¿½ (kierunek mostka OUT)
             sem_wait_nointr(ipc.sem_state);
             ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
             sem_post_chk(ipc.sem_state);
 
-            // czekaj a¿ wszyscy zejda
+            // czekaj aï¿½ wszyscy zejda
             for (;;) {
                 sem_wait_nointr(ipc.sem_state);
                 int onboard = ipc.shm->onboard_passengers;
@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
         sem_post_chk(ipc.sem_state);
         logf(&lg, "captain", "arrived -> UNLOADING");
 
-        // czekaj a¿ wszyscy zejda
+        // czekaj aï¿½ wszyscy zejda
         for (;;) {
             sem_wait_nointr(ipc.sem_state);
             int onboard = ipc.shm->onboard_passengers;
@@ -277,14 +277,14 @@ int main(int argc, char** argv) {
             break;
         }
 
-        // jeœli stop przyszed³ w trakcie rejsu -> koñczymy po bie¿¹cym rejsie (jesteœmy po dop³yniêciu)
+        // jeï¿½li stop przyszedï¿½ w trakcie rejsu -> koï¿½czymy po bieï¿½ï¿½cym rejsie (jesteï¿½my po dopï¿½yniï¿½ciu)
         if (g_stop) {
             logf(&lg, "captain", "stop after trip completion -> END");
             set_phase(&ipc, &lg, PHASE_END, 0);
             break;
         }
 
-        // prze³¹cz kierunek na rejs powrotny
+        // przeï¿½ï¿½cz kierunek na rejs powrotny
         sem_wait_nointr(ipc.sem_state);
         ipc.shm->direction = (ipc.shm->direction == DIR_KRAKOW_TO_TYNIEC)
             ? DIR_TYNIEC_TO_KRAKOW : DIR_KRAKOW_TO_TYNIEC;
