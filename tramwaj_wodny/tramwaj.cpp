@@ -131,15 +131,9 @@ int main(int argc, char** argv) {
         if (setpgid(0, 0) != 0) perror("setpgid(guardian)");
         close(guard_pipe[1]);
         char tmp;
-        for (;;) {
-            ssize_t n = read(guard_pipe[0], &tmp, 1);
-            if (n == 0) break;
-            if (n < 0) {
-                if (errno == EINTR) continue;
-                break;
-            }
-        }
+        ssize_t n = read(guard_pipe[0], &tmp, 1);
         close(guard_pipe[0]);
+        if (n == 1) _exit(0);
         kill(-sim_pgid, SIGTERM);
         usleep(300 * 1000);
         kill(-sim_pgid, SIGKILL);
@@ -154,7 +148,7 @@ int main(int argc, char** argv) {
     logger_t lg;
     if (logger_open(&lg, args.log_path, ipc.sem_log) != 0) {
         fprintf(stderr, "Failed to open log\n");
-        ipc_destroy(shm_name, sem_prefix, msqid);
+        ipc_close(&ipc);
         close(guard_pipe[1]);
         return 1;
     }
@@ -284,7 +278,11 @@ int main(int argc, char** argv) {
     ipc_close(&ipc);
     ipc_destroy(shm_name, sem_prefix, msqid);
     free(passenger_pids);
-    close(guard_pipe[1]);
+    if (guard_pipe[1] >= 0) {
+        char bye = 0;
+        (void)write(guard_pipe[1], &bye, 1);
+        close(guard_pipe[1]);
+    }
 
     return 0;
 }
