@@ -1,4 +1,4 @@
-﻿#include "common.h"
+#include "common.h"
 #include "ipc.h"
 #include "cli.h"
 #include "util.h"
@@ -200,11 +200,8 @@ int main(int argc, char** argv) {
         if (g_shutdown) {
             logf(&lg, "launcher", "shutdown requested, signalling children...");
 
-            // ustaw shutdown w SHM
             while (sem_wait(ipc.sem_state) != 0) { if (errno == EINTR) continue; die_perror("sem_wait"); }
             ipc.shm->shutdown = 1;
-            ipc.shm->phase = PHASE_END;
-            ipc.shm->boarding_open = 0;
             if (sem_post(ipc.sem_state) != 0) die_perror("sem_post");
 
             if (captain_pid > 1) {
@@ -219,10 +216,8 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // daj czas na wyjście
-            sleep_ms(200);
+            sleep_ms(500);
 
-            // a potem SIGKILL jeśli ktoś wisi
             if (captain_pid > 1) {
                 if (kill(captain_pid, SIGKILL) != 0) perror("kill(SIGKILL captain)");
             }
@@ -234,9 +229,8 @@ int main(int argc, char** argv) {
                     if (kill(passenger_pids[i], SIGKILL) != 0) perror("kill(SIGKILL passenger)");
                 }
             }
-            // =====================================================
 
-            g_shutdown = 0; // żeby nie powtarzać
+            g_shutdown = 0;
         }
 
         int status = 0;

@@ -9,11 +9,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void sem_wait_nointr(sem_t* s) {
+static int sem_wait_nointr(sem_t* s) {
     while (sem_wait(s) != 0) {
-        if (errno == EINTR) continue;
+        if (errno == EINTR) return -1;
         die_perror("sem_wait");
     }
+    return 0;
 }
 
 static void sem_post_chk(sem_t* s) {
@@ -23,7 +24,7 @@ static void sem_post_chk(sem_t* s) {
 int logger_open(logger_t* lg, const char* path, sem_t* sem_log) {
     if (!lg || !path || !sem_log) return -1;
     lg->sem_log = sem_log;
-    // dzieci otwieraj¹ swój FD niezale¿nie
+    // dzieci otwieraj? sw?j FD niezale?nie
     int fd = open(path, O_CREAT | O_WRONLY | O_APPEND, 0600);
     if (fd < 0) {
         perror("open(log)");
@@ -42,7 +43,7 @@ void logger_close(logger_t* lg) {
 void logf(logger_t* lg, const char* role, const char* fmt, ...) {
     if (!lg || lg->fd < 0 || !role || !fmt) return;
 
-    sem_wait_nointr(lg->sem_log);
+    if (sem_wait_nointr(lg->sem_log) != 0) return;
 
     char buf[1024];
     int64_t ms = now_ms_monotonic();

@@ -36,11 +36,12 @@ static void install_handlers(void) {
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
 }
 
-static void sem_wait_nointr(sem_t* s) {
+static int sem_wait_nointr(sem_t* s) {
     while (sem_wait(s) != 0) {
-        if (errno == EINTR) continue;
+        if (errno == EINTR) return -1;
         die_perror("sem_wait");
     }
+    return 0;
 }
 static void sem_post_chk(sem_t* s) { if (sem_post(s) != 0) die_perror("sem_post"); }
 
@@ -53,18 +54,18 @@ static const char* dir_str(int d) {
 // - ustawienie bridge.dir = OUT
 // - p�tla: wybierz back, oznacz evicting, wy�lij CMD_EVICT(pid), czekaj na ACK
 // Dodatkowo: zliczamy ile OS�B zesz�o z mostka (ile evict�w).
-static void captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left_bridge_people) {
+static int captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left_bridge_people) {
     int left_cnt = 0;
 
     for (;;) {
-        sem_wait_nointr(ipc->sem_state);
+        if (sem_wait_nointr(ipc->sem_state) != 0) return -1;
 
         if (ipc->shm->bridge.count == 0) {
             ipc->shm->bridge.dir = BRIDGE_DIR_NONE;
             sem_post_chk(ipc->sem_state);
             logf(lg, "captain", "bridge empty -> ok to depart");
             if (out_left_bridge_people) *out_left_bridge_people = left_cnt;
-            return;
+            return 0;
         }
 
         bridge_node_t* last = bridge_back(ipc->shm);
@@ -96,7 +97,8 @@ static void captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left
         for (;;) {
             ssize_t n = msgrcv(ipc->msqid, &ack, sizeof(ack) - sizeof(long), 1, 0);
             if (n < 0) {
-                if (errno == EINTR) continue;
+                if (errno == EINTR && !g_exit) continue;
+                if (errno == EINTR) return -1;
                 perror("msgrcv(ACK)");
                 break;
             }
@@ -110,12 +112,13 @@ static void captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left
     }
 }
 
-static void set_phase(ipc_handles_t* ipc, logger_t* lg, phase_t ph, int boarding_open) {
-    sem_wait_nointr(ipc->sem_state);
+static int set_phase(ipc_handles_t* ipc, logger_t* lg, phase_t ph, int boarding_open) {
+    if (sem_wait_nointr(ipc->sem_state) != 0) return -1;
     ipc->shm->phase = ph;
     ipc->shm->boarding_open = boarding_open;
     sem_post_chk(ipc->sem_state);
     logf(lg, "captain", "phase=%d boarding_open=%d", (int)ph, boarding_open);
+    return 0;
 }
 
 int main(int argc, char** argv) {
@@ -145,22 +148,21 @@ int main(int argc, char** argv) {
 
     while (!g_exit) {
         // Sprawd� shutdown z launchera
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) break;
         int shutdown = ipc.shm->shutdown;
         sem_post_chk(ipc.sem_state);
         if (shutdown) {
             logf(&lg, "captain", "shutdown flag set -> END");
-            set_phase(&ipc, &lg, PHASE_END, 0);
+            if (set_phase(&ipc, &lg, PHASE_END, 0) != 0) break;
             break;
         }
 
         // reset jednorazowego sygna�u "early depart" na start tripu
         g_early_depart = 0;
 
-        // ===== LOADING =====
-        set_phase(&ipc, &lg, PHASE_LOADING, 1);
+        if (set_phase(&ipc, &lg, PHASE_LOADING, 1) != 0) break;
 
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) break;
         ipc.shm->trip_no += 1;
         int my_trip = ipc.shm->trip_no;
 
@@ -192,42 +194,37 @@ int main(int argc, char** argv) {
         }
 
         // Zamknij boarding i przejd� do DEPARTING
-        set_phase(&ipc, &lg, PHASE_DEPARTING, 0);
+        if (set_phase(&ipc, &lg, PHASE_DEPARTING, 0) != 0) break;
 
-        // wymu� ruch OUT na mostku (�eby nikt nie wchodzi� na statek)
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) break;
         ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
         sem_post_chk(ipc.sem_state);
 
-        // wyczy�� mostek od ko�ca (LIFO) + policz ile os�b zesz�o z mostka
         int trip_left_bridge = 0;
-        captain_clear_bridge(&ipc, &lg, &trip_left_bridge);
+        if (captain_clear_bridge(&ipc, &lg, &trip_left_bridge) != 0) break;
 
-        // snapshot: ilu faktycznie pop�ynie w tej podr�y (po zamkni�ciu boardingu i oczyszczeniu mostka)
         int trip_boarded_pax = 0;
         int trip_boarded_bikes = 0;
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) break;
         trip_boarded_pax = ipc.shm->onboard_passengers;
         trip_boarded_bikes = ipc.shm->onboard_bikes;
         sem_post_chk(ipc.sem_state);
 
         if (g_stop) {
-            // roz�adunek na miejscu (statek nie wyp�ywa)
-            set_phase(&ipc, &lg, PHASE_UNLOADING, 0);
+            if (set_phase(&ipc, &lg, PHASE_UNLOADING, 0) != 0) break;
 
-            // pozw�l pasa�erom zej�� (kierunek mostka OUT)
-            sem_wait_nointr(ipc.sem_state);
+            if (sem_wait_nointr(ipc.sem_state) != 0) break;
             ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
             sem_post_chk(ipc.sem_state);
 
-            // czekaj a� wszyscy zejda
             for (;;) {
-                sem_wait_nointr(ipc.sem_state);
+                if (sem_wait_nointr(ipc.sem_state) != 0) break;
                 int onboard = ipc.shm->onboard_passengers;
                 sem_post_chk(ipc.sem_state);
                 if (onboard == 0) break;
                 sleep_ms(50);
             }
+            if (g_exit) break;
 
             logf(&lg, "captain", "unloading complete (stop)");
             logf(&lg, "captain",
@@ -235,13 +232,12 @@ int main(int argc, char** argv) {
                 my_trip, dir_str(trip_dir), trip_boarded_pax, trip_boarded_bikes, trip_left_bridge);
 
             logf(&lg, "captain", "all passengers left after stop -> END");
-            set_phase(&ipc, &lg, PHASE_END, 0);
+            if (set_phase(&ipc, &lg, PHASE_END, 0) != 0) break;
             break;
         }
 
-        // ===== SAILING =====
         logf(&lg, "captain", "sailing for T2=%dms", ipc.shm->T2_ms);
-        set_phase(&ipc, &lg, PHASE_SAILING, 0);
+        if (set_phase(&ipc, &lg, PHASE_SAILING, 0) != 0) break;
         int64_t sail_start = now_ms_monotonic();
         while (!g_exit) {
             int64_t now = now_ms_monotonic();
@@ -249,21 +245,21 @@ int main(int argc, char** argv) {
             sleep_ms(20);
         }
 
-        // ===== UNLOADING =====
         logf(&lg, "captain", "arrived -> UNLOADING");
-        set_phase(&ipc, &lg, PHASE_UNLOADING, 0);
-        sem_wait_nointr(ipc.sem_state);
+        if (set_phase(&ipc, &lg, PHASE_UNLOADING, 0) != 0) break;
+        if (sem_wait_nointr(ipc.sem_state) != 0) break;
         ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
         sem_post_chk(ipc.sem_state);
 
         // czekaj a� wszyscy zejda
         for (;;) {
-            sem_wait_nointr(ipc.sem_state);
+            if (sem_wait_nointr(ipc.sem_state) != 0) break;
             int onboard = ipc.shm->onboard_passengers;
             sem_post_chk(ipc.sem_state);
             if (onboard == 0) break;
             sleep_ms(50);
         }
+        if (g_exit) break;
 
         logf(&lg, "captain", "unloading complete");
         logf(&lg, "captain",
@@ -273,19 +269,19 @@ int main(int argc, char** argv) {
         trips_done++;
         if (trips_done >= ipc.shm->R) {
             logf(&lg, "captain", "max trips R=%d reached -> END", ipc.shm->R);
-            set_phase(&ipc, &lg, PHASE_END, 0);
+            if (set_phase(&ipc, &lg, PHASE_END, 0) != 0) break;
             break;
         }
 
         // je�li stop przyszed� w trakcie rejsu -> ko�czymy po bie��cym rejsie (jeste�my po dop�yni�ciu)
         if (g_stop) {
             logf(&lg, "captain", "stop after trip completion -> END");
-            set_phase(&ipc, &lg, PHASE_END, 0);
+            if (set_phase(&ipc, &lg, PHASE_END, 0) != 0) break;
             break;
         }
 
         // prze��cz kierunek na rejs powrotny
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) break;
         ipc.shm->direction = (ipc.shm->direction == DIR_KRAKOW_TO_TYNIEC)
             ? DIR_TYNIEC_TO_KRAKOW : DIR_KRAKOW_TO_TYNIEC;
         sem_post_chk(ipc.sem_state);

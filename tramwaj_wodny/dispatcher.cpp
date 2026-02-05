@@ -36,25 +36,26 @@ static void usage(void) {
     );
 }
 
-static void sem_wait_nointr(sem_t* s) {
-    while (sem_wait(s) != 0) {                // czekaj na semafor
-        if (errno == EINTR) continue;         // je�li przerwane sygna�em, pon�w
+static int sem_wait_nointr(sem_t* s) {
+    while (sem_wait(s) != 0) {
+        if (errno == EINTR) return -1;         // je�li przerwane sygna�em, pon�w
         die_perror("sem_wait");               // inne b��dy -> zako�cz
     }
+    return 0;
 }
 static void sem_post_chk(sem_t* s) {
     if (sem_post(s) != 0) die_perror("sem_post"); // zwolnij semafor; b��d -> zako�cz
 }
 
 static pid_t read_captain_pid_from_shm(ipc_handles_t* ipc) {
-    sem_wait_nointr(ipc->sem_state);          // wejd� do sekcji krytycznej stanu w SHM
+    if (sem_wait_nointr(ipc->sem_state) != 0) return 0;
     pid_t p = ipc->shm->captain_pid;          // odczytaj PID kapitana zapisany w pami�ci wsp�dzielonej
     sem_post_chk(ipc->sem_state);             // wyjd� z sekcji krytycznej
     return p;                                 // zwr�� PID
 }
 
 static int should_exit_from_shm(ipc_handles_t* ipc) {
-    sem_wait_nointr(ipc->sem_state);          // zablokuj dost�p do stanu
+    if (sem_wait_nointr(ipc->sem_state) != 0) return 1;
     int shutdown = ipc->shm->shutdown;        // sprawd� flag� globalnego shutdown
     int end_phase = (ipc->shm->phase == PHASE_END); // sprawd� czy kapitan jest w fazie ko�cowej
     sem_post_chk(ipc->sem_state);             // odblokuj

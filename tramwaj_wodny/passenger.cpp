@@ -25,11 +25,12 @@ static void install_handlers(void) {
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
 }
 
-static void sem_wait_nointr(sem_t* s) {
+static int sem_wait_nointr(sem_t* s) {
     while (sem_wait(s) != 0) {
-        if (errno == EINTR) continue;
+        if (errno == EINTR) return -1;
         die_perror("sem_wait");
     }
+    return 0;
 }
 static int sem_trywait_chk(sem_t* s) {
     // EAGAIN/EINTR -> traktujemy jako "nie uda?o si?"
@@ -81,7 +82,7 @@ static void passenger_send_ack(ipc_handles_t* ipc, int trip_no) {
 }
 
 static int read_trip_no(ipc_handles_t* ipc) {
-    sem_wait_nointr(ipc->sem_state);
+    if (sem_wait_nointr(ipc->sem_state) != 0) return -1;
     int t = ipc->shm->trip_no;
     sem_post_chk(ipc->sem_state);
     return t;
@@ -100,7 +101,7 @@ static void passenger_handle_evict(ipc_handles_t* ipc, logger_t* lg,
     for (;;) {
         if (g_exit) return;
 
-        sem_wait_nointr(ipc->sem_state);
+        if (sem_wait_nointr(ipc->sem_state) != 0) return;
         bridge_dir_t d = ipc->shm->bridge.dir;
         sem_post_chk(ipc->sem_state);
 
@@ -112,7 +113,7 @@ static void passenger_handle_evict(ipc_handles_t* ipc, logger_t* lg,
         for (;;) {
             if (g_exit) return;
 
-            sem_wait_nointr(ipc->sem_state);
+            if (sem_wait_nointr(ipc->sem_state) != 0) return;
             bridge_node_t* b = bridge_back(ipc->shm);
 
             if (b && b->pid == getpid()) {
@@ -191,7 +192,7 @@ int main(int argc, char** argv) {
         }
 
         // odczytaj stan (snapshot)
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) goto finish;
         shm_state_t snapshot = *ipc.shm;
         sem_post_chk(ipc.sem_state);
 
@@ -247,7 +248,7 @@ int main(int argc, char** argv) {
         }
 
         // Wej?cie na mostek: wymagamy dir NONE lub IN
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) goto finish;
 
         if (ipc.shm->phase != PHASE_LOADING ||
             ipc.shm->boarding_open == 0 ||
@@ -320,9 +321,8 @@ int main(int argc, char** argv) {
                 goto finish;
             }
 
-            sem_wait_nointr(ipc.sem_state);
+            if (sem_wait_nointr(ipc.sem_state) != 0) goto finish;
 
-            // je?li boarding zamkni?ty albo faza != LOADING -> zejd? LIFO
             if (ipc.shm->phase != PHASE_LOADING || ipc.shm->boarding_open == 0) {
                 sem_post_chk(ipc.sem_state);
 
@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
 
     // Czekaj na UNLOADING i wyjd? ze statku (DIR_OUT)
     while (!g_exit) {
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) goto finish;
         phase_t ph = ipc.shm->phase;
         int shutdown = ipc.shm->shutdown;
         sem_post_chk(ipc.sem_state);
@@ -392,7 +392,7 @@ int main(int argc, char** argv) {
         bridge_units_held = gotu;
     }
 
-    sem_wait_nointr(ipc.sem_state);
+    if (sem_wait_nointr(ipc.sem_state) != 0) goto finish;
     if (ipc.shm->bridge.dir == BRIDGE_DIR_NONE) ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
 
     // wej?cie od strony statku
@@ -407,7 +407,7 @@ int main(int argc, char** argv) {
     for (;;) {
         if (g_exit) goto finish;
 
-        sem_wait_nointr(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) != 0) goto finish;
         bridge_node_t* bk = bridge_back(ipc.shm);
         if (bk && bk->pid == me) {
             bridge_node_t out;
@@ -443,11 +443,11 @@ finish:
     }
 
     if (onboard_counted) {
-        // awaryjnie skoryguj liczniki (?eby kapitan nie wisia?)
-        sem_wait_nointr(ipc.sem_state);
-        if (ipc.shm->onboard_passengers > 0) ipc.shm->onboard_passengers -= 1;
-        if (has_bike && ipc.shm->onboard_bikes > 0) ipc.shm->onboard_bikes -= 1;
-        sem_post_chk(ipc.sem_state);
+        if (sem_wait_nointr(ipc.sem_state) == 0) {
+            if (ipc.shm->onboard_passengers > 0) ipc.shm->onboard_passengers -= 1;
+            if (has_bike && ipc.shm->onboard_bikes > 0) ipc.shm->onboard_bikes -= 1;
+            sem_post_chk(ipc.sem_state);
+        }
         onboard_counted = false;
     }
 
