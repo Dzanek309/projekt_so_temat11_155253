@@ -240,8 +240,8 @@ int main(int argc, char** argv) {
         }
 
         // ===== SAILING =====
-        set_phase(&ipc, &lg, PHASE_SAILING, 0);
         logf(&lg, "captain", "sailing for T2=%dms", ipc.shm->T2_ms);
+        set_phase(&ipc, &lg, PHASE_SAILING, 0);
         int64_t sail_start = now_ms_monotonic();
         while (!g_exit) {
             int64_t now = now_ms_monotonic();
@@ -250,11 +250,11 @@ int main(int argc, char** argv) {
         }
 
         // ===== UNLOADING =====
+        logf(&lg, "captain", "arrived -> UNLOADING");
         set_phase(&ipc, &lg, PHASE_UNLOADING, 0);
         sem_wait_nointr(ipc.sem_state);
         ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
         sem_post_chk(ipc.sem_state);
-        logf(&lg, "captain", "arrived -> UNLOADING");
 
         // czekaj a� wszyscy zejda
         for (;;) {
