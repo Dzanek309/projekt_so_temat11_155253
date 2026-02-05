@@ -229,10 +229,6 @@ int main(int argc, char** argv) {
         if (g_shutdown) {
             logf(&lg, "launcher", "shutdown requested, signalling children...");
 
-            while (sem_wait(ipc.sem_state) != 0) { if (errno == EINTR) continue; die_perror("sem_wait"); }
-            ipc.shm->shutdown = 1;
-            if (sem_post(ipc.sem_state) != 0) die_perror("sem_post");
-
             if (captain_pid > 1) {
                 if (kill(captain_pid, SIGTERM) != 0) perror("kill(SIGTERM captain)");
             }
