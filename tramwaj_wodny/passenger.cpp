@@ -202,10 +202,10 @@ int main(int argc, char** argv) {
             break;
         }
 
-        // czekaj na LOADING w swoim kierunku
         if (snapshot.phase != PHASE_LOADING ||
             snapshot.boarding_open == 0 ||
             !desired_dir_ok(&snapshot, desired_dir)) {
+            sleep_ms(1);
             continue;
         }
 
@@ -339,7 +339,6 @@ int main(int argc, char** argv) {
 
             bridge_node_t* fr = bridge_front(ipc.shm);
             if (fr && fr->pid == me && fr->evicting == 0) {
-                // wchodz? na statek
                 bridge_node_t out;
                 bridge_pop_front(ipc.shm, &out);
                 if (ipc.shm->bridge.count == 0) ipc.shm->bridge.dir = BRIDGE_DIR_NONE;
@@ -352,7 +351,6 @@ int main(int argc, char** argv) {
 
                 sem_post_chk(ipc.sem_state);
 
-                // zszed?em z mostka -> zwalniam jednostki mostka
                 release_n(ipc.sem_bridge, bridge_units_held);
                 bridge_units_held = 0;
 
@@ -364,6 +362,7 @@ int main(int argc, char** argv) {
             }
 
             sem_post_chk(ipc.sem_state);
+            sleep_ms(1);
         }
 
         break; // po wej?ciu/odmowie ko?czymy pr?b?
