@@ -120,6 +120,11 @@ Launcher tworzy `guard_pipe` (`pipe()`), ustawia `FD_CLOEXEC` na obu końcach. P
 
 ---
 
+## 6.1 Wyróżniające elementy
+
+- **Zaawansowane konstrukcje** (ponad pkt. 2.2): **proces guardian** – potomek launchera czeka na `read(pipe)`; przy normalnym zakończeniu launcher pisze bajt i guardian się kończy; przy śmierci launchera (EOF na pipe) guardian wywołuje `ipc_destroy()` i wysyła SIGTERM/SIGKILL do grupy. 
+---
+
 ## 7. Zauważone problemy / trudności
 - Najbardziej wymagające było zapewnienie poprawnego opróżniania mostka w kolejności LIFO przy jednoczesnej asynchroniczności procesów pasażerów (rozwiązane przez deque w SHM + CMD_EVICT/ACK przez kolejkę SysV).
 - Duża liczba ścieżek rollback/cleanup w procesie pasażera (rezerwacje miejsc/rowerów/mostka) – rozwiązane przez lokalne flagi stanu i „best-effort cleanup” przy kończeniu procesu.
@@ -127,40 +132,136 @@ Launcher tworzy `guard_pipe` (`pipe()`), ustawia `FD_CLOEXEC` na obu końcach. P
 ---
 
 ## 8. Testy (min. 4) – opis i oczekiwane wyniki
-> Testy uruchamiano wielokrotnie (losowość pasażerów). Weryfikacja odbywa się przez analizę logów: brak zakleszczeń i poprawne zakończenie procesów, brak przekroczeń limitów N/M/K, poprawna reakcja na sygnały.
+> Testy uruchamiano wielokrotnie (losowość pasażerów). Weryfikacja odbywa się przez analizę logów oraz poleceń systemowych. Platforma: Linux (polecenia `ps`, `grep`, `pstree`, `wc`).
 
 ### Test 1 – podstawowy przebieg bez sygnałów z dużą ilością pasażerów
-Przykład:
-`./tramwaj --N 256 --M 25 --K 45 --T1 1000 --T2 1500 --R 3 --P 5000 --bike-prob 0.3 --log simulation.log`
 
-Oczekiwane:
-- wykonanie dokładnie R rejsów,
-- po każdym UNLOADING `onboard_passengers` wraca do 0,
-- brak zawieszeń, log zawiera podsumowania TRIP SUMMARY.
+**Cel:** Weryfikacja stabilności systemu przy maksymalnym obciążeniu (P=5000 procesów pasażerów) oraz potwierdzenie, że każdy pasażer, który wszedł na statek, prawidłowo z niego schodzi i kończy działanie.
 
-### Test 2 – mały mostek i dużo rowerów (sprawdzenie K i units=2)
-Przykład:
-`./tramwaj --N 20 --M 10 --K 3 --T1 1500 --T2 1000 --R 2 --P 40 --bike-prob 0.8 --log simulation.log`
+**Uruchomienie:**
+```bash
+./tramwaj --N 500 --M 0 --K 100 --T1 5000 --T2 1500 --R 3 --P 5000 --bike-prob 0 --log simulation.log
+```
 
-Oczekiwane:
-- brak przekroczeń pojemności mostka (K jednostek),
-- pasażerowie z rowerem częściej rezygnują/rollbackują, ale system działa stabilnie.
+**Przebieg testu:**
+1. Uruchomić symulację w tle lub osobnym terminalu.
+2. Poczekać, aż launcher utworzy wszystkie procesy pasażerów. -> KROK A
+3. Poczekać do zakończenia symulacji (3 rejsy: R=3; czas ≈ 3×(T1+T2) + narzut).
+4. Po zakończeniu/w trakcie launchera wykonać poniższe kroki weryfikacyjne.
 
-### Test 3 – wcześniejszy odpływ (SIGUSR1)
-Uruchomić jak Test 1, podczas LOADING w dispatcherze wpisać `1` i Enter.
+**Kryteria weryfikacji:**
 
-Oczekiwane:
-- kapitan kończy LOADING przed upływem T1,
-- przechodzi do DEPARTING i czyści mostek,
-- dopiero potem przechodzi do SAILING.
+| Krok | Polecenie | Oczekiwany wynik |
+|------|-----------|------------------|
+| A | `ps aux \| grep '[p]assenger' \| wc -l` | **5000** – podczas działania symulacji kiedy launcher utworzy procesy |
+| B | `grep -c "BOARDED ship" simulation.log` | wartość X |
+| C | `grep -c "LEFT ship and freed resources" simulation.log` | wartość X (identyczna jak w B) |
+| D | `grep -c "role=passenger EXIT" simulation.log` | **5000** |
+| E | `pstree` | po zakończeniu brak wzorca `5000*[passenger]`; wszystkie procesy pasażerów zakończone |
 
-### Test 4 – stop podczas LOADING (SIGUSR2)
-Uruchomić symulację, podczas LOADING w dispatcherze wpisać `2` i Enter.
+> **Uwaga:** W kroku A użyto `grep '[p]assenger'`, aby nie liczyć samego procesu `grep`. Alternatywnie: `pgrep -c passenger`.
 
-Oczekiwane:
-- statek nie rozpoczyna rejsu (brak SAILING),
-- kapitan przechodzi do UNLOADING na miejscu i kończy,
-- faza końcowa `PHASE_END`, procesy kończą się, zasoby IPC sprzątnięte.
+**Interpretacja:**
+- A = 5000 → launcher utworzył wszystkie procesy pasażerów.
+- B = C → każdy pasażer, który wszedł na statek, prawidłowo z niego wyszedł (brak zakleszczeń).
+- D = 5000 → wszystkie procesy pasażerów zarejestrowały korektne zakończenie w logu.
+- E → brak procesów zombie / osieroconych potomków launchera.
+
+### Test 2 – mostek: ograniczenie K i reguła „rower = 2 jednostki”
+
+**Cel:** Weryfikacja reguły „rower = 2 jednostki". Przy K=1 mostek ma miejsce tylko na 1 jednostkę; pasażer z rowerem potrzebuje 2, więc nigdy nie wejdzie na mostek ani na statek. W podsumowaniu każdego rejsu musi być bikes=0. Zobaczymy czy mostek trzyma szczelność kiedy jest bombardowany przez tak dużą ilość ponadmiarowych żądań o alokację miejsca mimo jego braku.
+
+**Uruchomienie:**
+```bash
+./tramwaj --N 20 --M 10 --K 1 --T1 1500 --T2 1000 --R 2 --P 1000 --bike-prob 0.8 --log simulation.log
+```
+
+**Kontekst:** Przy K=1 na mostku mieści się tylko 1 jednostka. Pasażer bez roweru = 1 jednostka (może wejść). Pasażer z rowerem = 2 jednostki (nie zmieści się). Przy bike-prob=0.8 większość pasażerów ma rower i żaden z nich nie powinien wsiąść na statek.
+
+**Przebieg testu:**
+1. Uruchomić symulację.
+2. Poczekać na zakończenie (2 rejsy).
+3. Wykonać kroki weryfikacyjne.
+
+**Kryteria weryfikacji:**
+
+| Krok | Polecenie | Oczekiwany wynik |
+|------|-----------|------------------|
+| A | `grep "TRIP SUMMARY" simulation.log \| grep -v "bikes=0"` | brak wyników (każdy rejs ma `bikes=0`) |
+| B | `grep "TRIP SUMMARY" simulation.log \| grep -c "bikes=0"` | **2** (liczba rejsów) |
+| C | `grep -c "BOARDED ship" simulation.log` | wartość X |
+| D | `grep -c "LEFT ship and freed resources" simulation.log` | wartość X (identyczna jak w C) |
+| E | `grep -c "role=passenger EXIT" simulation.log` | **1000** |
+| F | `pstree` | po zakończeniu brak osieroconych procesów `passenger` |
+
+**Interpretacja:**
+- A, B → w każdym rejsie bikes=0; pasażerowie z rowerem nie wsiadają na statek.
+- C = D → każdy pasażer, który wszedł na statek, z niego wyszedł.
+- E, F → wszystkie procesy pasażerów zakończyły się poprawnie.
+
+### Test 3 – ciągłość wielu rejsów (maszyna stanów)
+
+**Cel:** Weryfikacja, że przy większej liczbie rejsów (R=100) maszyna stanów (LOADING→DEPARTING→SAILING→UNLOADING) poprawnie realizuje każdy cykl. Żaden rejs nie zostaje utracony ani zduplikowany – testuje niezawodność sekwencji faz.
+
+**Uruchomienie:**
+```bash
+./tramwaj --N 100 --M 15 --K 30 --T1 600 --T2 400 --R 100 --P 5000 --bike-prob 0.25 --log simulation.log
+```
+
+**Kontekst:** Krótsze T1 i T2 przyspieszają cykle, co obciąża przełączanie faz. Kapitan loguje TRIP SUMMARY po każdym zakończonym rejsie – liczba wpisów musi równać się R.
+
+**Przebieg testu:**
+1. Uruchomić symulację.
+2. Poczekać na zakończenie (100 rejsów).
+3. Wykonać kroki weryfikacyjne.
+
+**Kryteria weryfikacji:**
+
+| Krok | Polecenie | Oczekiwany wynik |
+|------|-----------|------------------|
+| A | `grep -c "TRIP SUMMARY" simulation.log` | **100** (każdy rejs ma podsumowanie) |
+| B | `grep "TRIP SUMMARY" simulation.log \| grep -oE 'trip=[0-9]+' \| sort -n \| uniq \| wc -l` | **100** (numery rejsów 1–100, bez duplikatów) |
+| C | `grep -c "BOARDED ship" simulation.log` | wartość X |
+| D | `grep -c "LEFT ship and freed resources" simulation.log` | wartość X (identyczna jak w C) |
+| E | `grep -c "role=passenger EXIT" simulation.log` | **5000** |
+| F | `pstree` | po zakończeniu brak osieroconych procesów `passenger` |
+
+**Interpretacja:**
+- A, B → maszyna stanów wykonała dokładnie 100 cykli rejsów bez utraty ani duplikacji.
+- C = D → spójność wejść/wyjść pasażerów.
+- E, F → poprawne zakończenie wszystkich procesów.
+
+### Test 4 – proces guardian (sprzątanie IPC przy śmierci launchera)
+
+**Cel:** Przy natychmiastowym zabiciu procesu launchera (np. SIGKILL) proces guardian powinien utworzyć się na tyle szybko by wykryć śmierć (EOF na pipe), wywołuje `ipc_destroy()` i wysyła SIGTERM/SIGKILL do grupy procesów, dzięki czemu nie pozostają osierocone procesy ani nieposprzątane obiekty IPC.
+
+**Uruchomienie:**
+```bash
+./tramwaj --N 20 --M 5 --K 8 --T1 5000 --T2 3000 --R 10 --P 50 --bike-prob 0.2 --log simulation.log &
+TRAMWAJ_PID=$!
+sleep 0.1
+kill -9 $TRAMWAJ_PID
+```
+
+**Kontekst:** Symulacja startuje w tle; po 0.1 s launcher jest zabijany (SIGKILL). Guardian nie dostaje bajtu od launchera (pipe zamyka się przy śmierci), więc wykonuje sprzątanie: SIGTERM → SIGKILL do grupy, potem `ipc_destroy()`.
+
+**Przebieg testu:**
+1. Uruchomić powyższy skrypt (tramwaj w tle, kill po 0.1 s).
+2. Poczekać ok. 2 s po kill.
+3. Wykonać kroki weryfikacyjne.
+
+**Kryteria weryfikacji:**
+
+| Krok | Polecenie | Oczekiwany wynik |
+|------|-----------|------------------|
+| A | `pstree` lub `ps aux \| grep -E "captain\|dispatcher\|passenger" \| grep -v grep` | brak procesów `tramwaj`, `captain`, `dispatcher`, `passenger` (guardian zakończył grupę) |
+| B | `ipcs -s` / `ipcs -m` | brak pozostałych semaforów/pamięci dzielonej po tej symulacji (nazwy z prefiksem projektu) lub kolejne uruchomienie tramwaj startuje bez błędów IPC |
+| C | Ponowne uruchomienie: `./tramwaj --N 20 --M 5 --K 8 --T1 1000 --T2 500 --R 1 --P 10 --log simulation2.log` | program startuje i kończy się poprawnie |
+
+**Interpretacja:**
+- A → guardian zabił grupę po śmierci launchera, brak orphanów.
+- B, C → guardian wywołał `ipc_destroy()`, kolejna instancja nie konfliktuje z pozostałościami.
+
 
 ---
 
