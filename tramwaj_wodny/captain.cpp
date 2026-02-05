@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
         ipc.shm->bridge.dir = BRIDGE_DIR_NONE;
         sem_post_chk(ipc.sem_state);
 
-        sleep(100);
+        // sleep(100);
         logf(&lg, "captain", "trip=%d direction=%d LOADING", my_trip, trip_dir);
         int64_t start = now_ms_monotonic();
         while (!g_exit) {

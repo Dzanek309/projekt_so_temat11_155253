@@ -5,6 +5,7 @@
 #include "logging.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,6 +77,8 @@ int main(int argc, char** argv) {
     }
 
     install_handlers();
+    if (setpgid(0, 0) != 0) perror("setpgid(launcher)");
+    pid_t sim_pgid = getpgrp();
 
     // Unikalne nazwy IPC zależne od PID launchera
     pid_t launcher_pid = getpid();
@@ -116,12 +119,43 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    int guard_pipe[2];
+    if (pipe(guard_pipe) != 0) die_perror("pipe(guard_pipe)");
+    fcntl(guard_pipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(guard_pipe[1], F_SETFD, FD_CLOEXEC);
+
+    pid_t guardian_pid = fork();
+    if (guardian_pid < 0) die_perror("fork(guardian)");
+
+    if (guardian_pid == 0) {
+        if (setpgid(0, 0) != 0) perror("setpgid(guardian)");
+        close(guard_pipe[1]);
+        char tmp;
+        for (;;) {
+            ssize_t n = read(guard_pipe[0], &tmp, 1);
+            if (n == 0) break;
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+        }
+        close(guard_pipe[0]);
+        kill(-sim_pgid, SIGTERM);
+        usleep(300 * 1000);
+        kill(-sim_pgid, SIGKILL);
+        usleep(200 * 1000);
+        ipc_destroy(shm_name, sem_prefix, msqid);
+        _exit(0);
+    }
+
+    close(guard_pipe[0]);
+
     (void)unlink(args.log_path);
     logger_t lg;
     if (logger_open(&lg, args.log_path, ipc.sem_log) != 0) {
         fprintf(stderr, "Failed to open log\n");
-        // cleanup i wyjście
         ipc_destroy(shm_name, sem_prefix, msqid);
+        close(guard_pipe[1]);
         return 1;
     }
     logf(&lg, "launcher", "IPC created shm=%s sem_prefix=%s msqid=%d", shm_name, sem_prefix, msqid);
@@ -250,6 +284,7 @@ int main(int argc, char** argv) {
     ipc_close(&ipc);
     ipc_destroy(shm_name, sem_prefix, msqid);
     free(passenger_pids);
+    close(guard_pipe[1]);
 
     return 0;
 }
