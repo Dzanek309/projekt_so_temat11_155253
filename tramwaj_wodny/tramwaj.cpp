@@ -44,12 +44,12 @@ static int proc_limit_ok(int want_children) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_NPROC, &rl) != 0) {
         perror("getrlimit(RLIMIT_NPROC)");
-        return 1; // nie blokuj jeśli nie da się odczytać
+        return 1; // nie blokuj jesli nie da sie odczytac
     }
-    // rl.rlim_cur może być RLIM_INFINITY
+    // rl.rlim_cur moze byc RLIM_INFINITY
     if (rl.rlim_cur == RLIM_INFINITY) return 1;
-    // Minimalny check: jeśli limit jest bardzo niski, ostrzeż.
-    // W praktyce i tak fork() zwróci błąd.
+    // Minimalny check: jesli limit jest bardzo niski, ostrzez.
+    // W praktyce i tak fork() zwroci blad.
     if ((unsigned long)want_children + 20 > (unsigned long)rl.rlim_cur) return 0;
     return 1;
 }
@@ -66,10 +66,10 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    // Minimalne prawa dostępu do IPC
+    // Minimalne prawa dostepu do IPC
     umask(0077);
 
-    // Limit procesów: launcher + captain + dispatcher + P
+    // Limit procesow: launcher + captain + dispatcher + P
     int want_children = 2 + args.P;
     if (!proc_limit_ok(want_children)) {
         fprintf(stderr, "Refusing to spawn %d children: RLIMIT_NPROC too low\n", want_children);
@@ -80,14 +80,14 @@ int main(int argc, char** argv) {
     if (setpgid(0, 0) != 0) perror("setpgid(launcher)");
     pid_t sim_pgid = getpgrp();
 
-    // Unikalne nazwy IPC zależne od PID launchera
+    // Unikalne nazwy IPC zalezne od PID launchera
     pid_t launcher_pid = getpid();
     char shm_name[128];
     char sem_prefix[128];
     snprintf(shm_name, sizeof(shm_name), "/tramwaj_shm_%d", (int)launcher_pid);
     snprintf(sem_prefix, sizeof(sem_prefix), "/tramwaj_%d", (int)launcher_pid);
 
-    // Stan początkowy SHM
+    // Stan poczatkowy SHM
     shm_state_t init;
     memset(&init, 0, sizeof(init));
     init.N = args.N;
@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
     logf(&lg, "launcher", "spawned dispatcher pid=%d", (int)dispatcher_pid);
 
     // Spawn passengers
-    // Pasażerowie losują kierunek (0/1) i rower wg bike_prob
+    // Pasazerowie losuja kierunek (0/1) i rower wg bike_prob
     srand((unsigned)launcher_pid);
 
     pid_t* passenger_pids = (pid_t*)calloc((size_t)args.P, sizeof(pid_t));
@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
         passenger_pids[i] = pp;
     }
 
-    // główna pętla czekania
+    // glowna petla czekania
     int alive = want_children;
     while (alive > 0) {
         if (g_shutdown) {

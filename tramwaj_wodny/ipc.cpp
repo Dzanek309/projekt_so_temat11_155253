@@ -143,7 +143,7 @@ int ipc_destroy(const char* shm_name, const char* sem_prefix, int msqid) {
 
     // SHM unlink
     if (shm_unlink(shm_name) != 0) {
-        // mo¿e ju¿ usuniête; nie traktuj jako fatal
+        // moze juz usuniete; nie traktuj jako fatal
         perror("shm_unlink");
     }
 

@@ -50,11 +50,11 @@ static const char* dir_str(int d) {
     return (d == DIR_KRAKOW_TO_TYNIEC) ? "KRAKOW->TYNIEC" : "TYNIEC->KRAKOW";
 }
 
-// Kapitan wymusza zej�cie od ko�ca kolejki (LIFO) poprzez:
+// Kapitan wymusza zejscie od konca kolejki (LIFO) poprzez:
 // - ustawienie phase=DEPARTING i boarding_open=0
 // - ustawienie bridge.dir = OUT
-// - p�tla: wybierz back, oznacz evicting, wy�lij CMD_EVICT(pid), czekaj na ACK
-// Dodatkowo: zliczamy ile OS�B zesz�o z mostka (ile evict�w).
+// - petla: wybierz back, oznacz evicting, wyslij CMD_EVICT(pid), czekaj na ACK
+// Dodatkowo: zliczamy ile osob zeszlo z mostka (ile evictow).
 static int captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left_bridge_people) {
     int left_cnt = 0;
 
@@ -81,7 +81,7 @@ static int captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left_
 
         sem_post_chk(ipc->sem_state);
 
-        // wy�lij polecenie ewakuacji do konkretnego PID (mtype=PID)
+        // wyslij polecenie ewakuacji do konkretnego PID (mtype=PID)
         msg_cmd_t cmd;
         cmd.mtype = (long)target;
         cmd.cmd = CMD_EVICT;
@@ -108,7 +108,7 @@ static int captain_clear_bridge(ipc_handles_t* ipc, logger_t* lg, int* out_left_
                 logf(lg, "captain", "ack from pid=%d (left_bridge=%d)", (int)target, left_cnt);
                 break;
             }
-            // Je�li przyjdzie inny ack, ignorujemy (w praktyce rzadkie przy sekwencyjnym evict).
+            // Jesli przyjdzie inny ack, ignorujemy (w praktyce rzadkie przy sekwencyjnym evict).
         }
     }
 }
@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
     int trips_done = 0;
 
     while (!g_exit) {
-        // Sprawd� shutdown z launchera
+        // Sprawdz shutdown z launchera
         if (sem_wait_nointr(ipc.sem_state) != 0) break;
         int shutdown = ipc.shm->shutdown;
         sem_post_chk(ipc.sem_state);
@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
             break;
         }
 
-        // reset jednorazowego sygna�u "early depart" na start tripu
+        // reset jednorazowego sygnalu "early depart" na start tripu
         g_early_depart = 0;
 
         if (set_phase(&ipc, &lg, PHASE_LOADING, 1) != 0) break;
@@ -167,7 +167,7 @@ int main(int argc, char** argv) {
         ipc.shm->trip_no += 1;
         int my_trip = ipc.shm->trip_no;
 
-        // snapshot kierunku dla statystyk tej podr�y
+        // snapshot kierunku dla statystyk tej podrozy
         int trip_dir = (int)ipc.shm->direction;
 
         ipc.shm->bridge.dir = BRIDGE_DIR_NONE;
@@ -177,7 +177,7 @@ int main(int argc, char** argv) {
         logf(&lg, "captain", "trip=%d direction=%d LOADING", my_trip, trip_dir);
         int64_t start = now_ms_monotonic();
         while (!g_exit) {
-            // je�li sygna�2 dotar� w trakcie za�adunku: statek nie wyp�ywa, pasa�erowie opuszczaj� statek
+            // jesli sygnal2 dotarl w trakcie zaladunku: statek nie wyplywa, pasazerowie opuszczaja statek
             if (g_stop) {
                 logf(&lg, "captain", "stop during LOADING -> cancel trip and UNLOADING");
                 break;
@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
             sleep_ms(20);
         }
 
-        // Zamknij boarding i przejd� do DEPARTING
+        // Zamknij boarding i przejda do DEPARTING
         if (set_phase(&ipc, &lg, PHASE_DEPARTING, 0) != 0) break;
 
         if (sem_wait_nointr(ipc.sem_state) != 0) break;
@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
         ipc.shm->bridge.dir = BRIDGE_DIR_OUT;
         sem_post_chk(ipc.sem_state);
 
-        // czekaj a� wszyscy zejda
+        // czekaj az wszyscy zejda
         for (;;) {
             if (sem_wait_nointr(ipc.sem_state) != 0) break;
             int onboard = ipc.shm->onboard_passengers;
@@ -274,14 +274,14 @@ int main(int argc, char** argv) {
             break;
         }
 
-        // je�li stop przyszed� w trakcie rejsu -> ko�czymy po bie��cym rejsie (jeste�my po dop�yni�ciu)
+        // jesli stop przyszedl w trakcie rejsu -> konczymy po biezacym rejsie (jestesmy po doplynieciu)
         if (g_stop) {
             logf(&lg, "captain", "stop after trip completion -> END");
             if (set_phase(&ipc, &lg, PHASE_END, 0) != 0) break;
             break;
         }
 
-        // prze��cz kierunek na rejs powrotny
+        // przelacz kierunek na rejs powrotny
         if (sem_wait_nointr(ipc.sem_state) != 0) break;
         ipc.shm->direction = (ipc.shm->direction == DIR_KRAKOW_TO_TYNIEC)
             ? DIR_TYNIEC_TO_KRAKOW : DIR_KRAKOW_TO_TYNIEC;

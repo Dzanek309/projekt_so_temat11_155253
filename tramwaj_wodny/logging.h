@@ -4,11 +4,11 @@
 #include <semaphore.h>
 #include <stdarg.h>
 
-// Prosty logger do pliku (append). U¿ywa semafora do serializacji wpisów.
+// Prosty logger do pliku (append). Uzywa semafora do serializacji wpisow.
 
 typedef struct {
-	int fd;           // open()'owany plik
-	sem_t* sem_log;   // named semaphore (binary)
+    int fd;           // open()'owany plik
+    sem_t* sem_log;   // named semaphore (binary)
 } logger_t;
 
 int logger_open(logger_t* lg, const char* path, sem_t* sem_log);

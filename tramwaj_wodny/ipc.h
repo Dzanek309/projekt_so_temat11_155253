@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
     typedef struct {
-        // nazwy (u¿ywane do cleanup)
+        // nazwy (uzywane do cleanup)
         char shm_name[128];
         char sem_prefix[128];
 
@@ -34,7 +34,7 @@ extern "C" {
     // Otwiera IPC (dzieci)
     int ipc_open(ipc_handles_t* h, const char* shm_name, const char* sem_prefix, int msqid);
 
-    // Zamkniêcie (wszyscy)
+    // Zamkniecie (wszyscy)
     void ipc_close(ipc_handles_t* h);
 
     // Cleanup (tylko launcher): sem_unlink/shm_unlink/msgctl(IPC_RMID)
