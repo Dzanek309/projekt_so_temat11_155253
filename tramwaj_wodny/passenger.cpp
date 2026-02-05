@@ -23,6 +23,7 @@ static void install_handlers(void) {
 
     if (sigaction(SIGINT, &sa, NULL) != 0) die_perror("sigaction(SIGINT)");
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
+    if (sigaction(SIGHUP, &sa, NULL) != 0) die_perror("sigaction(SIGHUP)");
 }
 
 static int sem_wait_nointr(sem_t* s) {

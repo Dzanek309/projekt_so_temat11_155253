@@ -24,7 +24,6 @@ static void sem_post_chk(sem_t* s) {
 int logger_open(logger_t* lg, const char* path, sem_t* sem_log) {
     if (!lg || !path || !sem_log) return -1;
     lg->sem_log = sem_log;
-    // dzieci otwieraj? sw?j FD niezale?nie
     int fd = open(path, O_CREAT | O_WRONLY | O_APPEND, 0600);
     if (fd < 0) {
         perror("open(log)");

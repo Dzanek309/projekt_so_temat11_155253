@@ -23,6 +23,7 @@ static void install_handlers(void) {
 
     if (sigaction(SIGINT, &sa, NULL) != 0) die_perror("sigaction(SIGINT)");   // podmie� obs�ug� Ctrl+C
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)"); // podmie� obs�ug� terminate
+    if (sigaction(SIGHUP, &sa, NULL) != 0) die_perror("sigaction(SIGHUP)");
 }
 
 static void usage(void) {

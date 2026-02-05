@@ -26,6 +26,7 @@ static void install_handlers(void) {
     sa.sa_flags = 0;
     if (sigaction(SIGINT, &sa, NULL) != 0) die_perror("sigaction(SIGINT)");
     if (sigaction(SIGTERM, &sa, NULL) != 0) die_perror("sigaction(SIGTERM)");
+    if (sigaction(SIGHUP, &sa, NULL) != 0) die_perror("sigaction(SIGHUP)");
 }
 
 static void spawn_exec(const char* path, char* const argvv[], pid_t* out_pid) {
@@ -115,7 +116,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // logger dla launchera (tylko do kilku wpisów)
+    (void)unlink(args.log_path);
     logger_t lg;
     if (logger_open(&lg, args.log_path, ipc.sem_log) != 0) {
         fprintf(stderr, "Failed to open log\n");
